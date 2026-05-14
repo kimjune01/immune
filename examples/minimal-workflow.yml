@@ -1,48 +1,96 @@
 # Drop in .github/workflows/immune.yml
 #
-# Two jobs, label-driven dispatch. Filter fires on PR open. Attend fires
-# only when filter (or a maintainer) adds immune:t1-pass.
+# One workflow, two jobs:
+#   filter (cheap, ~seconds, no LLM) → if it rejects, label immune:reject and stop
+#   attend (LLM, ~$0.01-$0.05/PR)    → waits for the maintainer's existing CI to
+#                                       finish before spending tokens. Only fires
+#                                       when filter passes AND CI is green.
 #
-# Attend runs a HEADLESS AGENT CLI (claude | codex | gemini), spawned K=3
-# times in parallel for the hypothesis-graph fan-out. Pick ONE block.
+# Labels are minimal and TERMINAL only:
+#   immune:reject       (filter)
+#   immune:trusted      (attend)
+#   immune:suspect      (attend)
+#   immune:needs-human  (attend)
+# State during the run is conveyed by GHA-native check_runs, not labels.
+#
+# OPTIONAL: to save your CI runner-minutes on filter-rejected spam, add this
+# one line to YOUR existing CI workflow's job(s):
+#   if: "!contains(github.event.pull_request.labels.*.name, 'immune:reject')"
+# Without it, your CI runs in parallel with immune; with it, your CI is gated
+# on immune:reject being absent.
 
 name: immune
 on:
-  pull_request:
-    types: [opened, synchronize, reopened]
   pull_request_target:
-    types: [labeled]
+    types: [opened, synchronize, reopened]
 
 permissions:
   contents: read
   pull-requests: write
   issues: write
+  checks: read
 
 jobs:
   filter:
-    if: github.event_name == 'pull_request'
     runs-on: ubuntu-latest
+    outputs:
+      verdict: ${{ steps.run.outputs.verdict }}
     steps:
-      - uses: kimjune01/immune/filter@v0
+      - id: run
+        uses: kimjune01/immune/filter@v0.3
         with:
-          mode: advisory  # or `gate` to auto-close on T0/T1 reject
+          mode: advisory  # `gate` would also auto-close on reject
 
   attend:
-    if: >
-      github.event_name == 'pull_request_target' &&
-      github.event.action == 'labeled' &&
-      github.event.label.name == 'immune:t1-pass'
+    needs: filter
+    if: needs.filter.outputs.verdict == 'pass'
     runs-on: ubuntu-latest
     steps:
-      # ---- claude (Anthropic direct) ----
-      - uses: kimjune01/immune/attend@v0
+      - name: Wait for maintainer CI (transparent ~20-line poll, no external action deps)
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REPO: ${{ github.repository }}
+          PR_SHA: ${{ github.event.pull_request.head.sha }}
+          THIS_WORKFLOW: ${{ github.workflow }}
+        run: |
+          set -euo pipefail
+          # Poll check-runs on the PR's HEAD commit. Skip our own workflow's
+          # checks (otherwise we'd deadlock waiting on ourselves).
+          while true; do
+            checks=$(gh api --paginate "repos/${REPO}/commits/${PR_SHA}/check-runs")
+            pending=$(echo "$checks" | jq --arg w "$THIS_WORKFLOW" '
+              [.check_runs[]
+                 | select(.name != $w)
+                 | select(.name | startswith($w + " /") | not)
+                 | select(.status != "completed")
+              ] | length')
+            failures=$(echo "$checks" | jq --arg w "$THIS_WORKFLOW" '
+              [.check_runs[]
+                 | select(.name != $w)
+                 | select(.name | startswith($w + " /") | not)
+                 | select(.conclusion == "failure" or .conclusion == "cancelled" or .conclusion == "timed_out")
+              ] | length')
+            if [ "$failures" -gt 0 ]; then
+              echo "::notice::Maintainer CI failed/cancelled — attend exits silently (no label change; the red X on CI is enough signal)"
+              exit 0
+            fi
+            if [ "$pending" -eq 0 ]; then
+              echo "All maintainer CI checks completed successfully — proceeding to attend"
+              break
+            fi
+            echo "Waiting on $pending pending check(s)..."
+            sleep 20
+          done
+
+      # ---- claude (Anthropic direct) — change credentials block per `agent:` ----
+      - uses: kimjune01/immune/attend@v0.3
         with:
           agent: claude
           hg-fanout: '3'
           anthropic-api-key: ${{ secrets.ANTHROPIC_API_KEY }}
 
       # ---- claude via Vertex AI ----
-      # - uses: kimjune01/immune/attend@v0
+      # - uses: kimjune01/immune/attend@v0.3
       #   with:
       #     agent: claude
       #     use-vertex: '1'
@@ -51,7 +99,7 @@ jobs:
       #     vertexai-location: us-east5
 
       # ---- claude via AWS Bedrock ----
-      # - uses: kimjune01/immune/attend@v0
+      # - uses: kimjune01/immune/attend@v0.3
       #   with:
       #     agent: claude
       #     use-bedrock: '1'
@@ -60,13 +108,13 @@ jobs:
       #     aws-region: us-east-1
 
       # ---- codex (OpenAI) ----
-      # - uses: kimjune01/immune/attend@v0
+      # - uses: kimjune01/immune/attend@v0.3
       #   with:
       #     agent: codex
       #     openai-api-key: ${{ secrets.OPENAI_API_KEY }}
 
       # ---- gemini (Google) ----
-      # - uses: kimjune01/immune/attend@v0
+      # - uses: kimjune01/immune/attend@v0.3
       #   with:
       #     agent: gemini
       #     gemini-api-key: ${{ secrets.GEMINI_API_KEY }}

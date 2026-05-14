@@ -135,21 +135,23 @@ When a backflow happens, the action that fires marks `prior_gates_voided: true` 
 
 ### Label vocabulary
 
-The action applies one **stage** label (which tier the PR is currently at) and one **verdict** label (final outcome) to each PR. Use them as filters in GitHub's PR list:
+Labels are **terminal-only**. The four below are the entire vocabulary. State during the run is conveyed by GHA-native check_runs (visible in PR's "Checks" tab), not labels — maintainer attention is a real cost and we don't pay it for transient state.
 
-| Label | Meaning | Maintainer filter |
-|---|---|---|
-| `immune:test-pending` | passed filter, queued for test | inspect: does it have receipts at all? |
-| `immune:reason-pending` | passed test, queued for LLM synthesis | tests ran clean; awaiting reasoning |
-| `immune:trusted` | passed all stages | `is:open label:immune:trusted` — your fast lane |
-| `immune:suspect` | warnings — read carefully | `is:open label:immune:suspect` — your slow lane |
-| `immune:needs-human` | judgment call (e.g. attestation tampered, novel pattern) | escalation queue |
-| `immune:test-failed` | sandbox replay failed | sediment or send back |
-| `immune:reject` | failed filter; auto-closed in `gate` mode | sediment |
-| `immune:wip-<run-id>` | a stage is currently processing this PR (lock) | should clear within minutes; flush sweeps stale ones |
-| `immune:dry-run` | tuning mode — runs all stages but suppresses side effects | manual; remove to run for real |
+| Label | Stage | Meaning | Maintainer filter |
+|---|---|---|---|
+| `immune:reject`  | filter (T0+T1) | failed mechanical checks (duplicate, AI-policy, missing receipts, attestation tampered); auto-closed in `gate` mode | sediment |
+| `immune:trusted` | attend (T2+T3) | receipts present + verified + WHY-rationale clear | `is:open label:immune:trusted` — fast lane |
+| `immune:suspect` | attend | passed filter; receipts thin, weak, or HG perturbations flagged risk — read the synthesis comment for the specific reason | slow lane |
 
-This is the actor model: each tier is a process, the PR is the mutable state, the labels are the messages. GitHub's existing UI (sort by label, filter by label, kanban projects) becomes the maintainer dashboard for free.
+There is NO `immune:needs-human` label. Anything the LLM would have escalated as "needs human" is either (a) a verifiable mechanical failure → `immune:reject` with the reason in the comment, or (b) a soft signal → `immune:suspect` with the reason in the comment. Hiding the reason behind a generic escalation label was making maintainers dig; surfacing it directly costs nothing.
+
+The actor model still holds — each stage is a process, the PR is the mutable state — but the messages are the JOB DEPENDENCIES (GHA `needs:`) and CHECK STATUSES, not labels. Labels are reserved for what the maintainer wants to filter their PR list on.
+
+If a maintainer wants the immune workflow to also gate the rest of their CI on `immune:reject` being absent, they add one line to their existing CI workflow's job(s):
+```yaml
+if: "!contains(github.event.pull_request.labels.*.name, 'immune:reject')"
+```
+Without that line, immune and the maintainer's CI run in parallel; attend's wait-for-CI loop ensures attend doesn't fire until CI is green.
 
 ## What it does
 

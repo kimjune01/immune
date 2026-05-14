@@ -15,7 +15,7 @@
 #   immune:needs-human → escalation (e.g. attestation tampered)
 
 name: 'immune-attend'
-description: 'T2+T3 of the immune pipeline. Fans out K=3 hypothesis perturbations via a headless agent CLI, then synthesizes a verdict.'
+description: 'T2+T3 of the immune pipeline. Fans out K=3 hypothesis perturbations via a headless agent CLI, then synthesizes a verdict (immune:trusted | immune:suspect | immune:needs-human).'
 inputs:
   github-token:
     description: 'GitHub token for API access'
@@ -152,13 +152,9 @@ runs:
         set -euo pipefail
         SCRIPT="${{ github.action_path }}/../immune.py"
 
-        # Defensive: refuse to run unless immune:t1-pass is on the PR.
-        # The workflow `if:` condition is the primary gate; this is belt-and-suspenders.
-        HAS_PASS=$(gh api "repos/${REPO}/issues/${PR_NUMBER}/labels" --jq '[.[].name] | index("immune:t1-pass")' 2>/dev/null || echo "null")
-        if [ "$HAS_PASS" = "null" ] || [ -z "$HAS_PASS" ]; then
-          echo "immune-attend: refusing — PR is not labeled immune:t1-pass" >&2
-          exit 0
-        fi
+        # The workflow `if:` (needs.filter.outputs.verdict == 'pass') is the
+        # primary gate. No defensive label check — labels are no longer the
+        # state mechanism, the job-needs-job dependency is.
 
         python "$SCRIPT" attend "${REPO}#${PR_NUMBER}" --format json > /tmp/immune-attend.json 2> /tmp/immune-attend.err || true
         if [ ! -s /tmp/immune-attend.json ]; then
@@ -180,14 +176,16 @@ runs:
           gh api "repos/${REPO}/issues/${PR_NUMBER}/comments" -F body=@/tmp/immune-attend.md > /dev/null
         fi
 
-        # Replace immune:t1-pass with verdict label
-        gh api "repos/${REPO}/issues/${PR_NUMBER}/labels/immune%3At1-pass" -X DELETE > /dev/null 2>&1 || true
+        # Strip any stale immune:* labels then apply the terminal verdict.
+        gh api "repos/${REPO}/issues/${PR_NUMBER}/labels" --jq '.[].name' 2>/dev/null \
+          | grep '^immune:' | while read -r l; do
+              gh api "repos/${REPO}/issues/${PR_NUMBER}/labels/$(printf '%s' "$l" | jq -sRr @uri)" -X DELETE > /dev/null 2>&1 || true
+            done
 
         case "$VERDICT" in
-          trusted)     LABEL="immune:trusted"     ;;
-          suspect)     LABEL="immune:suspect"     ;;
-          needs_human) LABEL="immune:needs-human" ;;
-          *)           LABEL="immune:unknown"     ;;
+          trusted) LABEL="immune:trusted" ;;
+          suspect) LABEL="immune:suspect" ;;
+          *)       LABEL="immune:suspect" ;;
         esac
         gh api "repos/${REPO}/issues/${PR_NUMBER}/labels" -f "labels[]=${LABEL}" > /dev/null 2>&1 || true
 

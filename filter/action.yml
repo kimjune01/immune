@@ -1,14 +1,15 @@
 # immune-filter — T0+T1: cheap mechanical checks + receipts presence/sha verification.
 #
-# Fires on PR open. Output: adds one of these labels to the PR:
-#   immune:t1-pass   → ready for attend
-#   immune:reject    → cheap reject (duplicate, ai-policy, missing receipts)
+# Fires on PR open/sync. Posts the receipt comment. Labels `immune:reject` if
+# the PR fails mechanical checks (and closes it in `gate` mode). On pass,
+# labels NOTHING — the verdict is exposed as a step output (`verdict=pass`)
+# for the workflow's `attend` job to chain on via `needs: filter`.
 #
 # Never calls an LLM. Never runs a sandbox. Sub-second to ~few seconds.
 # Free to run; safe to enable on every repo.
 
 name: 'immune-filter'
-description: 'T0+T1 of the immune pipeline. Mechanical filter + receipts verification. Adds immune:t1-pass or immune:reject label.'
+description: 'T0+T1 of the immune pipeline. Mechanical filter + receipts verification. Labels reject (if applicable); exposes verdict as step output.'
 inputs:
   github-token:
     description: 'GitHub token for API access'
@@ -18,6 +19,10 @@ inputs:
     description: '`advisory` (label only) or `gate` (auto-close on reject).'
     required: false
     default: 'advisory'
+outputs:
+  verdict:
+    description: '`pass` or `reject`. Use in downstream job `if:` (e.g. `needs.filter.outputs.verdict == ''pass''`).'
+    value: ${{ steps.run.outputs.verdict }}
 
 runs:
   using: 'composite'
@@ -27,7 +32,8 @@ runs:
       with:
         python-version: '3.11'
 
-    - name: Run immune filter
+    - id: run
+      name: Run immune filter
       shell: bash
       env:
         GITHUB_TOKEN: ${{ inputs.github-token }}
@@ -39,8 +45,6 @@ runs:
         SCRIPT="${{ github.action_path }}/../immune.py"
 
         # `|| true` so set -e doesn't kill before we can dump stderr.
-        # Without this, a python crash exits the step immediately and the err
-        # file is never read — making the failure invisible in the runner log.
         python "$SCRIPT" filter "${REPO}#${PR_NUMBER}" --format json > /tmp/immune-filter.json 2> /tmp/immune-filter.err || true
         if [ ! -s /tmp/immune-filter.json ]; then
           echo "::error::immune-filter: empty JSON output (python crashed)"
@@ -52,7 +56,10 @@ runs:
         VERDICT=$(python -c 'import json; print(json.load(open("/tmp/immune-filter.json"))["verdict"])')
         python "$SCRIPT" filter "${REPO}#${PR_NUMBER}" --format markdown > /tmp/immune-filter.md 2>> /tmp/immune-filter.err || true
 
-        # Update or post the receipt comment
+        # Expose for downstream job
+        echo "verdict=${VERDICT}" >> "$GITHUB_OUTPUT"
+
+        # Update or post the receipt comment (always, regardless of verdict)
         EXISTING=$(gh api --paginate "repos/${REPO}/issues/${PR_NUMBER}/comments" \
           --jq '.[] | select(.body | startswith("### immune filter")) | .id' 2>/dev/null | head -1 || true)
         if [ -n "$EXISTING" ]; then
@@ -61,22 +68,21 @@ runs:
           gh api "repos/${REPO}/issues/${PR_NUMBER}/comments" -F body=@/tmp/immune-filter.md > /dev/null
         fi
 
-        # Strip prior immune:* labels, then apply current one
+        # Only label on terminal reject (no transient t1-pass label).
+        # Strip any stale immune:* labels first to keep the state clean.
         gh api "repos/${REPO}/issues/${PR_NUMBER}/labels" --jq '.[].name' 2>/dev/null \
           | grep '^immune:' | while read -r l; do
               gh api "repos/${REPO}/issues/${PR_NUMBER}/labels/$(printf '%s' "$l" | jq -sRr @uri)" -X DELETE > /dev/null 2>&1 || true
             done
 
-        case "$VERDICT" in
-          pass)   LABEL="immune:t1-pass" ;;
-          reject) LABEL="immune:reject"  ;;
-          *)      LABEL="immune:unknown" ;;
-        esac
-        gh api "repos/${REPO}/issues/${PR_NUMBER}/labels" -f "labels[]=${LABEL}" > /dev/null 2>&1 || true
-
-        if [ "$MODE" = "gate" ] && [ "$VERDICT" = "reject" ]; then
-          gh api "repos/${REPO}/pulls/${PR_NUMBER}" -X PATCH -f state=closed > /dev/null
-          echo "immune-filter: CLOSED (verdict=reject, mode=gate)"
+        if [ "$VERDICT" = "reject" ]; then
+          gh api "repos/${REPO}/issues/${PR_NUMBER}/labels" -f "labels[]=immune:reject" > /dev/null 2>&1 || true
+          if [ "$MODE" = "gate" ]; then
+            gh api "repos/${REPO}/pulls/${PR_NUMBER}" -X PATCH -f state=closed > /dev/null
+            echo "immune-filter: CLOSED (verdict=reject, mode=gate)"
+          else
+            echo "immune-filter: reject → immune:reject (advisory)"
+          fi
         else
-          echo "immune-filter: ${VERDICT} → ${LABEL}"
+          echo "immune-filter: pass → (no label; verdict=pass exposed for downstream)"
         fi

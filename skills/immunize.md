@@ -117,7 +117,14 @@ NEW    .github/workflows/immune.yml      (<n> lines)
 Then print the full workflow file in a fenced code block so the user can audit it.
 
 ### D. Labels to be created
-List the 7 labels; print the `gh label create` script in a fenced code block.
+Only THREE terminal labels (immune is minimal about state-as-labels):
+- `immune:reject`  (filter — terminal)
+- `immune:trusted` (attend — terminal)
+- `immune:suspect` (attend — terminal)
+
+No `immune:needs-human` — escalation should reveal the specific shortcoming in the synthesis comment, not hide behind a generic label.
+
+Print the `gh label create` script in a fenced code block, one line per label, `|| true` suffixed.
 
 ### E. Secrets / token punch list (PROMINENT)
 
@@ -222,6 +229,41 @@ Spawn the chosen agent CLI twice in parallel — STRONG and WEAK — each in a f
 **WEAK agent** generates a real, mechanically-clean change without any receipts (no `## Hypothesis graph`, no `attestation_path:`, body describes WHAT). Predicted verdict: `immune:suspect`.
 
 When both agents return, both PRs exist on the fork. The immune workflow fires on each `pull_request: opened` event and applies labels.
+
+### Teaching comments (posted to each PR)
+
+Right after each PR is created, post a teaching comment via `gh pr comment <N> --repo <owner/repo> --body "..."`. The comment lives on the PR forever; it's the maintainer's first encounter with immune's label vocabulary, anchored to a concrete example.
+
+The comment shape (one per leg):
+
+```markdown
+### immune install — STRONG|WEAK leg (teaching note)
+
+This PR is one of two that **`/immunize`** opened on this fork as the install attestation. **Expected verdict on this one: `immune:trusted`|`immune:suspect`.** Sister PR #N is the other leg.
+
+**Why STRONG|WEAK:** <one paragraph explaining the receipts shape — full HG + attestation for STRONG; deliberately receiptless for WEAK; for WEAK note the model split (haiku) so weakness is organic, not instruction-shaped>.
+
+#### immune label vocabulary (you'll start seeing these on every PR)
+
+| Label | Stage | What it means |
+|---|---|---|
+| `immune:t1-pass`     | filter (T0+T1) | passed cheap mechanical checks — proceeds to attend |
+| `immune:reject`      | filter | failed a cheap check; in `gate` mode also closes the PR |
+| `immune:trusted`     | attend (T2+T3) | receipts present + verified + WHY clear — fast-lane |
+| `immune:suspect`     | attend | passed filter but receipts thin or missing |
+| `immune:needs-human` | attend | something off (e.g. attestation sha256 mismatch) |
+| `immune:t0-pass` / `immune:t0-reject` | substage | rare; usually skipped to T1 |
+| `immune:unknown`     | error | verdict computation failed; check the action run log |
+
+#### Verify
+
+`gh pr view <strong-N> --repo <owner/repo> --json labels --jq '.labels[].name'`
+`gh pr view <weak-N>   --repo <owner/repo> --json labels --jq '.labels[].name'`
+
+Action source: [kimjune01/immune@v0.2](https://github.com/kimjune01/immune) (AGPL-3.0). The action runs in your runner with your secrets; nothing is sent to a kimjune01-controlled endpoint.
+```
+
+The taxonomy table is the load-bearing part — it teaches the protocol the maintainer is about to be operating under. Per-PR placement (rather than a top-of-repo file) means the lesson is anchored to a concrete example forever, surfaces in PR scrollback, and doesn't pollute the maintainer's tree.
 
 ## Phase 7: Verification (the demonstration)
 

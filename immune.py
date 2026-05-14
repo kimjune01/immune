@@ -474,8 +474,11 @@ def run_attend(pr: PR, this_pr: dict) -> AttendReport:
     r.test_replay = {"status": "not_implemented_in_mvp"}
 
     if r.attestation_path and r.attestation_sha256_verified is False:
-        r.verdict = "needs_human"
-        r.reasons.append("attestation sha256 mismatch — fabricated or tampered")
+        # Filter already rejects on this case at T1 — kept here as a defensive
+        # belt-and-suspenders check. Map to suspect (label) but the comment
+        # surfaces the specific reason so the maintainer can act on it.
+        r.verdict = "warn"
+        r.reasons.append("attestation sha256 mismatch — fabricated or tampered (this should have been caught at filter; check workflow ordering)")
     elif r.attestation_path and r.attestation_sha256_verified:
         pass  # trusted
     elif r.hypothesis_graph_present:
@@ -626,9 +629,8 @@ def cmd_attend(args: argparse.Namespace) -> int:
     verdict_map = {
         "pass": "trusted",
         "warn": "suspect",
-        "needs_human": "needs_human",
     }
-    verdict = verdict_map.get(attend_r.verdict, "needs_human")
+    verdict = verdict_map.get(attend_r.verdict, "suspect")
 
     receipt = {
         "ts": dt.datetime.now(dt.timezone.utc).isoformat(),

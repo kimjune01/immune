@@ -77,12 +77,12 @@ runs:
             done
 
         if [ "$VERDICT" = "reject" ]; then
-          gh api "repos/${REPO}/issues/${PR_NUMBER}/labels" -f "labels[]=immune:reject" > /dev/null 2>&1 || true
+          gh api "repos/${REPO}/issues/${PR_NUMBER}/labels" -f "labels[]=immune:rejected" > /dev/null 2>&1 || true
           if [ "$MODE" = "gate" ]; then
             gh api "repos/${REPO}/pulls/${PR_NUMBER}" -X PATCH -f state=closed > /dev/null
             echo "immune-filter: CLOSED (verdict=reject, mode=gate)"
           else
-            echo "immune-filter: reject → immune:reject (advisory)"
+            echo "immune-filter: reject → immune:rejected (advisory)"
           fi
         else
           echo "immune-filter: pass → (no label; verdict=pass exposed for downstream)"

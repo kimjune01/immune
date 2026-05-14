@@ -662,11 +662,15 @@ def cmd_attend(args: argparse.Namespace) -> int:
         return 2
 
     attend_r = run_attend(pr, this_pr)
+    # Labels name what immune PRODUCED, not a trust judgment about the PR:
+    #   reasoned    = receipts verified + K=3 reasoning produced
+    #   no-receipts = reasoning produced, no contributor receipts to attest
+    # The maintainer makes the trust call.
     verdict_map = {
-        "pass": "trusted",
-        "warn": "suspect",
+        "pass": "reasoned",
+        "warn": "no-receipts",
     }
-    verdict = verdict_map.get(attend_r.verdict, "suspect")
+    verdict = verdict_map.get(attend_r.verdict, "no-receipts")
 
     receipt = {
         "ts": dt.datetime.now(dt.timezone.utc).isoformat(),

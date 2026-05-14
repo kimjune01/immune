@@ -184,9 +184,9 @@ runs:
             done
 
         case "$VERDICT" in
-          trusted) LABEL="immune:trusted" ;;
-          suspect) LABEL="immune:suspect" ;;
-          *)       LABEL="immune:suspect" ;;
+          reasoned)    LABEL="immune:reasoned"    ;;
+          no-receipts) LABEL="immune:no-receipts" ;;
+          *)           LABEL="immune:no-receipts" ;;
         esac
         gh api "repos/${REPO}/issues/${PR_NUMBER}/labels" -f "labels[]=${LABEL}" > /dev/null 2>&1 || true
 

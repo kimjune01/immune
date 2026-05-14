@@ -1,6 +1,6 @@
 ---
 name: immunize
-description: Install immune into one of your own forks. Idempotent — re-running on an installed repo reconciles instead of refusing. Elicits target if not given, detects fork's language/CI/AI-policy, previews the workflow + label set + secrets punch list, then on confirmation pushes the workflow + opens two code-gen PRs (STRONG with full receipts → expected immune:trusted; WEAK haiku-generated without receipts → expected immune:suspect). The verdict pair IS the install attestation.
+description: Install immune into one of your own forks. Idempotent — re-running on an installed repo reconciles instead of refusing. Elicits target if not given, detects fork's language/CI/AI-policy, previews the workflow + label set + secrets punch list, then on confirmation pushes the workflow + opens two code-gen PRs (STRONG with full receipts → expected immune:reasoned; WEAK haiku-generated without receipts → expected immune:no-receipts). The verdict pair IS the install attestation.
 argument-hint: [local-fork-path] [--mode advisory|gate] [--agent claude|codex|gemini]
 allowed-tools: Read, Write, Bash, Grep, AskUserQuestion
 ---
@@ -14,7 +14,7 @@ allowed-tools: Read, Write, Bash, Grep, AskUserQuestion
 > - **It will only talk to:** GitHub, and the LLM provider for your chosen agent. Nothing else.
 > - You are responsible for what your agent does.
 
-This skill installs immune into a fork **you own**, then proves the install worked by opening two code-gen PRs: STRONG (real bug-fix with full receipts → expected `immune:trusted`) and WEAK (haiku-generated, no receipts → expected `immune:suspect`). The pair of verdicts IS the install attestation.
+This skill installs immune into a fork **you own**, then proves the install worked by opening two code-gen PRs: STRONG (real bug-fix with full receipts → expected `immune:reasoned`) and WEAK (haiku-generated, no receipts → expected `immune:no-receipts`). The pair of verdicts IS the install attestation.
 
 ## Flow
 
@@ -94,8 +94,8 @@ The detected secrets are the suggestion order. The maintainer's answer is what g
 1. **Workflow file** — render `.github/workflows/immune.yml` from `examples/minimal-workflow.yml` with substitutions. Header comment lists every detection signal that fired and the knob it set.
 2. **Label script** — `gh label create` per the immune vocabulary, one per line, `|| true` suffixed, idempotent.
 3. **Code-gen agent briefs (STRONG + WEAK)** — two prompt templates that will be passed to the chosen agent CLI in Phase 6 to generate two real PRs against the fork. The pair IS the install attestation.
-   - **STRONG brief**: "find a real bug or improvement in this codebase, fix it, ship the receipts: hypothesis graph + attestation file with sha256 + WHY rationale". Predicted verdict: `immune:trusted`.
-   - **WEAK brief**: "make a real, mechanically-clean change with no receipts: no hypothesis graph, no attestation, body describes WHAT not WHY". Predicted verdict: `immune:suspect` (passes filter, fails attend).
+   - **STRONG brief**: "find a real bug or improvement in this codebase, fix it, ship the receipts: hypothesis graph + attestation file with sha256 + WHY rationale". Predicted verdict: `immune:reasoned`.
+   - **WEAK brief**: "make a real, mechanically-clean change with no receipts: no hypothesis graph, no attestation, body describes WHAT not WHY". Predicted verdict: `immune:no-receipts` (passes filter, fails attend).
 
 ## Phase 4: PREVIEW — show everything, then ask for confirmation
 
@@ -129,9 +129,9 @@ Then print the full workflow file in a fenced code block so the user can audit i
 
 ### D. Labels to be created
 Only THREE terminal labels (immune is minimal about state-as-labels):
-- `immune:reject`  (filter — terminal)
-- `immune:trusted` (attend — terminal)
-- `immune:suspect` (attend — terminal)
+- `immune:rejected`  (filter — terminal)
+- `immune:reasoned` (attend — terminal)
+- `immune:no-receipts` (attend — terminal)
 
 No `immune:needs-human` — escalation should reveal the specific shortcoming in the synthesis comment, not hide behind a generic label.
 
@@ -140,9 +140,9 @@ No `immune:needs-human` — escalation should reveal the specific shortcoming in
 Print the `gh label create` script in a fenced code block, one line per label, color `EDEDED`, `|| true` suffixed:
 
 ```bash
-gh label create immune:reject  --color EDEDED --description "filter T0+T1: failed mechanical checks" --repo <owner/repo> || true
-gh label create immune:trusted --color EDEDED --description "attend T2+T3: receipts verified, fast-lane review" --repo <owner/repo> || true
-gh label create immune:suspect --color EDEDED --description "attend: receipts thin or HG flagged risk; read the synthesis comment" --repo <owner/repo> || true
+gh label create immune:rejected  --color EDEDED --description "filter T0+T1: failed mechanical checks" --repo <owner/repo> || true
+gh label create immune:reasoned    --color EDEDED --description "attend T2+T3: receipts verified + K=3 reasoning produced (read the synthesis comment)" --repo <owner/repo> || true
+gh label create immune:no-receipts --color EDEDED --description "attend: no contributor receipts; reasoning still produced (read the synthesis comment)" --repo <owner/repo> || true
 ```
 
 ### E. Secrets / token punch list (PROMINENT)
@@ -200,24 +200,25 @@ The install isn't "trust us, it works" — it's "watch immune label its own self
 SETUP (no PR — direct push to master, since this is your own fork):
   branch:   master
   files:    .github/workflows/immune.yml
-  labels:   3 immune:* labels (reject / trusted / suspect — all #EDEDED)
+  labels:   3 immune:* labels (rejected / reasoned / no-receipts — all #EDEDED)
 
 PR 1 (STRONG code-gen, generated by chosen agent):
   branch:   immune/codegen-strong
   base:     <default-branch>
   shape:    real bug-fix or improvement, with hypothesis graph + attestation file (sha256 verified)
-  predicted verdict: immune:trusted
+  predicted label: immune:reasoned
 
 PR 2 (WEAK code-gen, generated by chosen agent):
   branch:   immune/codegen-weak
   base:     <default-branch>
-  shape:    real, mechanically-clean change, NO receipts, body describes WHAT not WHY
-  predicted verdict: immune:suspect  (passes T0/T1 filter, fails T2 attend's receipt check)
+  shape:    real, mechanically-clean change, NO contributor receipts
+  predicted label: immune:no-receipts  (passes T0/T1 filter; attend produces reasoning but has nothing to attest)
 
-The pair is the attestation: STRONG → trusted AND WEAK → suspect proves the
-filter is calibrated from both sides. STRONG → not-trusted means too strict;
-WEAK → trusted means too lenient. Either failure mode is visible in the
-verdict, not buried.
+The pair is the attestation:
+  STRONG → immune:reasoned    AND  WEAK → immune:no-receipts  →  calibrated.
+  STRONG → immune:no-receipts                                  →  attend's receipt-verify is too strict.
+  WEAK   → immune:reasoned                                     →  attend's receipt-verify is too lenient.
+Either failure mode is visible in the label pair, not buried.
 ```
 
 ### G. Confirmation prompt
@@ -243,9 +244,9 @@ Spawn the chosen agent CLI twice in parallel — STRONG and WEAK — each in a f
 - A brief from Phase 3
 - Authority to push to its own branch and open a PR against `<default>`
 
-**STRONG agent** generates a real bug-fix or improvement with full receipts (HG, attestation file, WHY rationale, sha256 chain). Predicted verdict: `immune:trusted`.
+**STRONG agent** generates a real bug-fix or improvement with full receipts (HG, attestation file, WHY rationale, sha256 chain). Predicted verdict: `immune:reasoned`.
 
-**WEAK agent** generates a real, mechanically-clean change without any receipts (no `## Hypothesis graph`, no `attestation_path:`, body describes WHAT). Predicted verdict: `immune:suspect`.
+**WEAK agent** generates a real, mechanically-clean change without any receipts (no `## Hypothesis graph`, no `attestation_path:`, body describes WHAT). Predicted verdict: `immune:no-receipts`.
 
 When both agents return, both PRs exist on the fork. The immune workflow fires on each `pull_request: opened` event and applies labels.
 
@@ -258,7 +259,7 @@ The comment shape (one per leg):
 ```markdown
 ### immune install — STRONG|WEAK leg (teaching note)
 
-This PR is one of two that **`/immunize`** opened on this fork as the install attestation. **Expected verdict on this one: `immune:trusted`|`immune:suspect`.** Sister PR #N is the other leg.
+This PR is one of two that **`/immunize`** opened on this fork as the install attestation. **Expected verdict on this one: `immune:reasoned`|`immune:no-receipts`.** Sister PR #N is the other leg.
 
 **Why STRONG|WEAK:** <one paragraph explaining the receipts shape — full HG + attestation for STRONG; deliberately receiptless for WEAK; for WEAK note the model split (haiku) so weakness is organic, not instruction-shaped>.
 
@@ -266,9 +267,9 @@ This PR is one of two that **`/immunize`** opened on this fork as the install at
 
 | Label | Stage | What it means |
 |---|---|---|
-| `immune:reject`  | filter (T0+T1) | failed mechanical checks (duplicate, AI-policy, attestation tampered); auto-closed in `gate` mode |
-| `immune:trusted` | attend (T2+T3) | receipts verified + WHY-rationale clear — fast-lane review |
-| `immune:suspect` | attend | passed filter; receipts thin or HG perturbations flagged risk — read the synthesis comment for the specific reason |
+| `immune:rejected`  | filter (T0+T1) | failed mechanical checks (duplicate, AI-policy, attestation tampered); auto-closed in `gate` mode |
+| `immune:reasoned` | attend (T2+T3) | receipts verified + WHY-rationale clear — fast-lane review |
+| `immune:no-receipts` | attend | passed filter; receipts thin or HG perturbations flagged risk — read the synthesis comment for the specific reason |
 
 State during the run is conveyed by GHA-native check_runs (visible in the PR's "Checks" tab), not labels. There is no `immune:t1-pass`, no `immune:needs-human`, no transient state-as-labels — maintainer attention is a real cost and we don't pay it for state GHA already shows.
 
@@ -289,30 +290,30 @@ Print, **without writing any files to the target repo**:
 ```
 Installed immune in <owner/repo>.
 
-STRONG code-gen PR (expect immune:trusted): <url>
-WEAK   code-gen PR (expect immune:suspect): <url>
+STRONG code-gen PR (expect immune:reasoned): <url>
+WEAK   code-gen PR (expect immune:no-receipts): <url>
 
 Verify in ~2 min once workflows fire:
 
-  STRONG (expect immune:trusted):
+  STRONG (expect immune:reasoned):
     gh pr view <strong-pr-num> --repo <owner/repo> --json labels --jq '.labels[].name'
 
-  WEAK   (expect immune:suspect):
+  WEAK   (expect immune:no-receipts):
     gh pr view <weak-pr-num>   --repo <owner/repo> --json labels --jq '.labels[].name'
 ```
 
-The convention IS the contract: `immune/codegen-strong` → `immune:trusted`, `immune/codegen-weak` → `immune:suspect`. Maintainer eyeballs the labels. No files are committed to the target repo for this purpose — install-level meta lives in the maintainer's terminal output, not their git history.
+The convention IS the contract: `immune/codegen-strong` → `immune:reasoned`, `immune/codegen-weak` → `immune:no-receipts`. Maintainer eyeballs the labels. No files are committed to the target repo for this purpose — install-level meta lives in the maintainer's terminal output, not their git history.
 
 Per-PR attestation files (e.g. `.immune/codegen-strong-attestation.txt` on the strong branch) DO live in the contributor's branch — they're load-bearing receipts that immune fetches and sha256-verifies. If the maintainer merges a strong PR, that attestation lands in master; squash-merging or excluding the path on merge is the maintainer's call. (The receipts are useful provenance even after merge; not pollution.)
 
-The verdict pair is the proof:
+The label pair is the proof:
 
-| STRONG verdict | WEAK verdict | What it means |
+| STRONG label | WEAK label | What it means |
 |---|---|---|
-| `trusted` | `suspect` | **Calibrated**. Install attested. |
-| `suspect` or `reject` | anything | Filter/attend too strict. STRONG should pass; tighten the agent brief or the reject criteria. |
-| `trusted` | `trusted` | Filter too lenient. WEAK shouldn't pass attend. Tighten attend's receipt check or downgrade legibility threshold. |
-| `reject` | `reject` | Both legs failing — likely the workflow itself isn't running. Check Actions tab on the fork. |
+| `immune:reasoned`    | `immune:no-receipts` | **Calibrated.** Install attested. |
+| `immune:no-receipts` | anything             | attend's receipt-verify too strict. STRONG should pass attestation; check sha256 chain or HG regex. |
+| `immune:reasoned`    | `immune:reasoned`    | attend's receipt-verify too lenient. WEAK shouldn't attest cleanly when it has no receipts. |
+| `immune:rejected`    | `immune:rejected`    | Both legs failing at filter — workflow isn't running, or mechanical-check thresholds are off. Check Actions tab. |
 
 ## Phase 8: Iteration loop
 

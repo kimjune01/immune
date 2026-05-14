@@ -1,22 +1,22 @@
 # Drop in .github/workflows/immune.yml
 #
 # One workflow, two jobs:
-#   filter (cheap, ~seconds, no LLM) → if it rejects, label immune:reject and stop
+#   filter (cheap, ~seconds, no LLM) → if it rejects, label immune:rejected and stop
 #   attend (LLM, ~$0.01-$0.05/PR)    → waits for the maintainer's existing CI to
 #                                       finish before spending tokens. Only fires
 #                                       when filter passes AND CI is green.
 #
 # Labels are TERMINAL only (three, all subtle gray #EDEDED):
-#   immune:reject   (filter)
-#   immune:trusted  (attend)
-#   immune:suspect  (attend)
+#   immune:rejected   (filter)
+#   immune:reasoned  (attend)
+#   immune:no-receipts  (attend)
 # State during the run is conveyed by GHA-native check_runs, not labels.
 #
 # OPTIONAL: to save your CI runner-minutes on filter-rejected spam, add this
 # one line to YOUR existing CI workflow's job(s):
-#   if: "!contains(github.event.pull_request.labels.*.name, 'immune:reject')"
+#   if: "!contains(github.event.pull_request.labels.*.name, 'immune:rejected')"
 # Without it, your CI runs in parallel with immune; with it, your CI is gated
-# on immune:reject being absent.
+# on immune:rejected being absent.
 
 name: immune
 on:

@@ -6,11 +6,10 @@
 #                                       finish before spending tokens. Only fires
 #                                       when filter passes AND CI is green.
 #
-# Labels are minimal and TERMINAL only:
-#   immune:reject       (filter)
-#   immune:trusted      (attend)
-#   immune:suspect      (attend)
-#   immune:needs-human  (attend)
+# Labels are TERMINAL only (three, all subtle gray #EDEDED):
+#   immune:reject   (filter)
+#   immune:trusted  (attend)
+#   immune:suspect  (attend)
 # State during the run is conveyed by GHA-native check_runs, not labels.
 #
 # OPTIONAL: to save your CI runner-minutes on filter-rejected spam, add this
@@ -37,7 +36,7 @@ jobs:
       verdict: ${{ steps.run.outputs.verdict }}
     steps:
       - id: run
-        uses: kimjune01/immune/filter@v0.3
+        uses: kimjune01/immune/filter@v0.3.2
         with:
           mode: advisory  # `gate` would also auto-close on reject
 
@@ -79,14 +78,14 @@ jobs:
           done
 
       # ---- claude (Anthropic direct) — change credentials block per `agent:` ----
-      - uses: kimjune01/immune/attend@v0.3
+      - uses: kimjune01/immune/attend@v0.3.2
         with:
           agent: claude
           hg-fanout: '3'
           anthropic-api-key: ${{ secrets.ANTHROPIC_API_KEY }}
 
       # ---- claude via Vertex AI ----
-      # - uses: kimjune01/immune/attend@v0.3
+      # - uses: kimjune01/immune/attend@v0.3.2
       #   with:
       #     agent: claude
       #     use-vertex: '1'
@@ -95,7 +94,7 @@ jobs:
       #     vertexai-location: us-east5
 
       # ---- claude via AWS Bedrock ----
-      # - uses: kimjune01/immune/attend@v0.3
+      # - uses: kimjune01/immune/attend@v0.3.2
       #   with:
       #     agent: claude
       #     use-bedrock: '1'
@@ -104,13 +103,13 @@ jobs:
       #     aws-region: us-east-1
 
       # ---- codex (OpenAI) ----
-      # - uses: kimjune01/immune/attend@v0.3
+      # - uses: kimjune01/immune/attend@v0.3.2
       #   with:
       #     agent: codex
       #     openai-api-key: ${{ secrets.OPENAI_API_KEY }}
 
       # ---- gemini (Google) ----
-      # - uses: kimjune01/immune/attend@v0.3
+      # - uses: kimjune01/immune/attend@v0.3.2
       #   with:
       #     agent: gemini
       #     gemini-api-key: ${{ secrets.GEMINI_API_KEY }}

@@ -605,7 +605,10 @@ def cmd_filter(args: argparse.Namespace) -> int:
     else:
         print(emit_filter_markdown(receipt))
 
-    return 0 if verdict == "pass" else 1
+    # Always exit 0 on successful run. The verdict is in the JSON; propagating
+    # it through the exit code breaks `set -e` in the action wrapper, which
+    # would mask labeling-as-reject as a workflow failure.
+    return 0
 
 
 def cmd_attend(args: argparse.Namespace) -> int:
@@ -643,7 +646,9 @@ def cmd_attend(args: argparse.Namespace) -> int:
     else:
         print(emit_attend_markdown(receipt))
 
-    return 0 if verdict in ("trusted", "suspect") else 1
+    # See cmd_filter: verdict is JSON-only; exit code is just success/failure
+    # of the run itself (PR fetch, label API, etc).
+    return 0
 
 
 def emit_filter_markdown(receipt: dict) -> str:

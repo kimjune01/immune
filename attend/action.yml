@@ -160,9 +160,14 @@ runs:
           exit 0
         fi
 
-        python "$SCRIPT" attend "${REPO}#${PR_NUMBER}" --format json > /tmp/immune-attend.json
+        python "$SCRIPT" attend "${REPO}#${PR_NUMBER}" --format json > /tmp/immune-attend.json 2> /tmp/immune-attend.err
+        if [ ! -s /tmp/immune-attend.json ]; then
+          echo "immune-attend: empty JSON output" >&2
+          cat /tmp/immune-attend.err >&2 || true
+          exit 1
+        fi
         VERDICT=$(python -c 'import json; print(json.load(open("/tmp/immune-attend.json"))["verdict"])')
-        python "$SCRIPT" attend "${REPO}#${PR_NUMBER}" --format markdown > /tmp/immune-attend.md
+        python "$SCRIPT" attend "${REPO}#${PR_NUMBER}" --format markdown > /tmp/immune-attend.md 2>> /tmp/immune-attend.err || true
 
         # Update or post the synthesis comment
         EXISTING=$(gh api --paginate "repos/${REPO}/issues/${PR_NUMBER}/comments" \

@@ -28,7 +28,9 @@ Preview-then-confirm is the default. There is no `--dry-run` flag because **the 
 3. `git rev-parse --git-dir` — fail if not a git repo.
 4. `git remote get-url origin` — fail if origin is not owned by `gh api user --jq .login`.
 5. `git status --porcelain` — refuse if working tree is dirty.
-6. `gh auth status` — fail fast on auth issues.
+6. `gh auth status --show-token` — fail fast on auth issues. Inspect token scopes:
+   - **Required**: `repo` (or fine-grained equivalent) and `workflow` (to push the workflow file).
+   - **LOUD WARNING** if scopes include any `admin:*` (`admin:org`, `admin:repo_hook`, `admin:enterprise`, etc.) or other escalated permissions beyond what an installer needs. Print a banner and suggest the maintainer mint a fine-grained PAT scoped to exactly this repo with: `Pull requests: read+write`, `Contents: read+write` (just for branch push), `Issues: read+write` (for labels), `Workflows: read+write`. Provide the verification script (Phase E). Do not block — the maintainer is sophisticated enough to make the call.
 7. Resolve `nameWithOwner` and default branch via `gh repo view --json nameWithOwner,defaultBranchRef`.
 
 ## Phase 1: Detection (parallel)
@@ -79,16 +81,9 @@ The detected secrets are the suggestion order. The maintainer's answer is what g
 
 1. **Workflow file** — render `.github/workflows/immune.yml` from `examples/minimal-workflow.yml` with substitutions. Header comment lists every detection signal that fired and the knob it set.
 2. **Label script** — `gh label create` per the immune vocabulary, one per line, `|| true` suffixed, idempotent.
-3. **Install PR body (strong)** — carries the receipts that immune itself reads:
-   - Hypothesis graph (H0: install file is well-formed; H1: workflow triggers on the right events; H2: stages compose; etc., each with verification)
-   - Attestation: workflow was rendered from template + detection signals (cite the signal table)
-   - Self-prediction: "this PR should be labeled `immune:trusted`"
-4. **Canary PR diff and body (weak)** — a deliberately receiptless PR designed to fail immune. Default canary is a one-character whitespace tweak in `README.md`:
-   - Empty body
-   - No linked issue
-   - No hypothesis graph
-   - No tests
-   - Self-prediction: "this PR should be labeled `immune:reject` or `immune:suspect`"
+3. **Code-gen agent briefs (STRONG + WEAK)** — two prompt templates that will be passed to the chosen agent CLI in Phase 6 to generate two real PRs against the fork. The pair IS the install attestation.
+   - **STRONG brief**: "find a real bug or improvement in this codebase, fix it, ship the receipts: hypothesis graph + attestation file with sha256 + WHY rationale". Predicted verdict: `immune:trusted`.
+   - **WEAK brief**: "make a real, mechanically-clean change with no receipts: no hypothesis graph, no attestation, body describes WHAT not WHY". Predicted verdict: `immune:suspect` (passes filter, fails attend).
 
 ## Phase 4: PREVIEW — show everything, then ask for confirmation
 
@@ -152,81 +147,118 @@ REPO PERMISSIONS:
 
 If any required item is missing or unknown, **block confirmation** until the user confirms they've set them or explicitly accepts a degraded install (filter-only; attend will hard-fail until the secret is set).
 
-### F. PRs that will be opened
-```
-PR 1 (install, strong):
-  branch:   immune/install
-  base:     <default-branch>
-  title:    immune: install filter+attend gate
-  receipts: hypothesis graph + attestation in body
-  expected verdict: immune:trusted
+#### Optional: fine-grained PAT verification script
 
-PR 2 (canary, weak):
-  branch:   immune/canary-weak
+If Phase 0 flagged the local gh token as over-scoped, provide this script for the maintainer to mint and verify a properly-scoped PAT:
+
+```bash
+# After minting at https://github.com/settings/tokens?type=beta
+# (Repository access: kimjune01/<repo>; Permissions: Pull requests RW, Contents RW, Issues RW, Workflows RW)
+
+export GH_TOKEN="github_pat_..."
+gh api repos/<owner>/<repo> --jq .name                                  # contents:read
+gh api repos/<owner>/<repo>/labels --jq '.[].name' | head                # issues:read
+gh label create immune:test --color cccccc --repo <owner>/<repo> 2>&1   # issues:write
+gh label delete immune:test --repo <owner>/<repo> --yes 2>&1            # issues:write (cleanup)
+gh pr list --repo <owner>/<repo> --limit 1                              # pull_requests:read
+# Pushing a branch tests contents:write; opening a PR tests pull_requests:write.
+```
+
+If all four commands succeed without permission errors, the PAT scope is right. Use that token for the install (export GH_TOKEN before re-running /immunize).
+
+### F. Install demonstration (the attestation)
+
+The install isn't "trust us, it works" — it's "watch immune label its own self-test PRs and see the verdicts come out as predicted". That's the demonstration.
+
+```
+SETUP (no PR — direct push to master, since this is your own fork):
+  branch:   master
+  files:    .github/workflows/immune.yml
+  labels:   immune:* vocabulary (~9 labels)
+
+PR 1 (STRONG code-gen, generated by chosen agent):
+  branch:   immune/codegen-strong
   base:     <default-branch>
-  title:    docs: trim trailing whitespace in README
-  receipts: NONE (deliberately)
-  expected verdict: immune:reject (or immune:suspect in advisory mode)
+  shape:    real bug-fix or improvement, with hypothesis graph + attestation file (sha256 verified)
+  predicted verdict: immune:trusted
+
+PR 2 (WEAK code-gen, generated by chosen agent):
+  branch:   immune/codegen-weak
+  base:     <default-branch>
+  shape:    real, mechanically-clean change, NO receipts, body describes WHAT not WHY
+  predicted verdict: immune:suspect  (passes T0/T1 filter, fails T2 attend's receipt check)
+
+The pair is the attestation: STRONG → trusted AND WEAK → suspect proves the
+filter is calibrated from both sides. STRONG → not-trusted means too strict;
+WEAK → trusted means too lenient. Either failure mode is visible in the
+verdict, not buried.
 ```
 
 ### G. Confirmation prompt
 
 Use AskUserQuestion: "Proceed with install? Reply `go` to commit + push + open both PRs, or `abort` to cancel." Until confirmed, no git ops, no remote calls.
 
-## Phase 5: Execute (only after confirmation)
+## Phase 5: Setup (only after confirmation)
 
-1. **Branch + commit (install)**
-   - `git checkout -b immune/install` (refuse if exists)
+1. **Workflow direct-push to master** — for an own-fork install, no PR for the workflow itself; commit + push to default branch. (For an upstream install, this becomes a PR — out of scope for the canary flow.)
    - Write `.github/workflows/immune.yml`
-   - `git add` + commit with HEREDOC message that mirrors the install PR body's receipt summary
-   - `git push -u origin immune/install`
+   - `git add .github/workflows/immune.yml` + commit with HEREDOC message
+   - `git push origin <default>`
 
 2. **Labels** — execute the script from Phase 4D. Each line `|| true` (idempotent).
 
-3. **Install PR** — `gh pr create --base <default> --head immune/install --title "..." --body "<install PR body>"`.
+3. **Switch back** to whatever branch the user was on at preflight.
 
-4. **Canary branch + commit**
-   - `git checkout <default>` (or `git fetch origin <default>`)
-   - `git checkout -b immune/canary-weak`
-   - Apply the canary diff (e.g. `sed -i '' 's/ $//' README.md` if there's trailing whitespace, else add and remove a single space)
-   - Commit with empty body, terse subject only
-   - `git push -u origin immune/canary-weak`
+## Phase 6: Generate the attestation pair (code-gen PRs)
 
-5. **Canary PR** — `gh pr create --base <default> --head immune/canary-weak --title "docs: trim trailing whitespace" --body ""`.
+Spawn the chosen agent CLI twice in parallel — STRONG and WEAK — each in a fresh clone of the fork (`/tmp/<repo>-strong/`, `/tmp/<repo>-weak/`) so they don't stomp each other's git state. Each agent gets:
 
-6. **Switch back** to whatever branch the user was on at preflight.
+- The codebase (cloned)
+- A brief from Phase 3
+- Authority to push to its own branch and open a PR against `<default>`
 
-## Phase 6: Verification
+**STRONG agent** generates a real bug-fix or improvement with full receipts (HG, attestation file, WHY rationale, sha256 chain). Predicted verdict: `immune:trusted`.
+
+**WEAK agent** generates a real, mechanically-clean change without any receipts (no `## Hypothesis graph`, no `attestation_path:`, body describes WHAT). Predicted verdict: `immune:suspect`.
+
+When both agents return, both PRs exist on the fork. The immune workflow fires on each `pull_request: opened` event and applies labels.
+
+## Phase 7: Verification (the demonstration)
 
 Print:
 
 ```
 Installed immune in <owner/repo>.
 
-Install PR (expect immune:trusted):  <url>
-Canary PR (expect immune:reject):    <url>
+STRONG code-gen PR (expect immune:trusted): <url>
+WEAK   code-gen PR (expect immune:suspect): <url>
 
 Watch with:
-  gh pr view <install-url> --json labels,statusCheckRollup
-  gh pr view <canary-url>  --json labels,statusCheckRollup
+  gh pr view <strong-url> --json labels,statusCheckRollup
+  gh pr view <weak-url>   --json labels,statusCheckRollup
 
-Wait ~2 min for the workflows to fire, then re-check. Report back.
+Wait ~2 min for the workflows to fire, then re-check.
 ```
 
-If both labels match expectations, the install is attested. If either fails:
-- **Install labeled reject/suspect** → bug in immune's filter or the install PR's receipts; iterate on the install PR's body or the workflow file
-- **Canary labeled trusted** → immune's filter is too lenient; tighten the inferred mode or the action's reject criteria
+The verdict pair is the proof:
 
-## Phase 7: Iteration loop
+| STRONG verdict | WEAK verdict | What it means |
+|---|---|---|
+| `trusted` | `suspect` | **Calibrated**. Install attested. |
+| `suspect` or `reject` | anything | Filter/attend too strict. STRONG should pass; tighten the agent brief or the reject criteria. |
+| `trusted` | `trusted` | Filter too lenient. WEAK shouldn't pass attend. Tighten attend's receipt check or downgrade legibility threshold. |
+| `reject` | `reject` | Both legs failing — likely the workflow itself isn't running. Check Actions tab on the fork. |
+
+## Phase 8: Iteration loop
 
 Both PRs sit on branches you control. To iterate:
 
-1. Edit on the relevant branch (`.github/workflows/immune.yml` for the workflow itself; PR body via `gh pr edit` for receipts)
+1. Edit on the relevant branch (workflow file, agent brief, or PR body)
 2. `git push` — fires `pull_request: synchronize`, workflow re-runs
 3. Watch labels
 4. Repeat
 
-When both verdicts match expectations, merge the install PR. Close the canary (or leave open as a permanent low-priority regression test).
+Once verdicts match predictions, the install is attested. Leave the PRs open as a permanent regression test or close them. Either way, the workflow continues running on every future PR — including ones that aren't from this install pipeline.
 
 ## Refusal cases
 

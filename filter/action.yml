@@ -38,9 +38,15 @@ runs:
         set -euo pipefail
         SCRIPT="${{ github.action_path }}/../immune.py"
 
-        python "$SCRIPT" filter "${REPO}#${PR_NUMBER}" --format json > /tmp/immune-filter.json
+        # stderr → stdout so tracebacks are visible in the runner log
+        python "$SCRIPT" filter "${REPO}#${PR_NUMBER}" --format json > /tmp/immune-filter.json 2> /tmp/immune-filter.err
+        if [ ! -s /tmp/immune-filter.json ]; then
+          echo "immune-filter: empty JSON output" >&2
+          cat /tmp/immune-filter.err >&2 || true
+          exit 1
+        fi
         VERDICT=$(python -c 'import json; print(json.load(open("/tmp/immune-filter.json"))["verdict"])')
-        python "$SCRIPT" filter "${REPO}#${PR_NUMBER}" --format markdown > /tmp/immune-filter.md
+        python "$SCRIPT" filter "${REPO}#${PR_NUMBER}" --format markdown > /tmp/immune-filter.md 2>> /tmp/immune-filter.err || true
 
         # Update or post the receipt comment
         EXISTING=$(gh api --paginate "repos/${REPO}/issues/${PR_NUMBER}/comments" \

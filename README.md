@@ -122,6 +122,17 @@ gh pr view <weak-pr>   --repo <owner/repo> --json labels --jq '.labels[].name'
 
 Expected: STRONG → `immune:reasoned`, WEAK → `immune:no-receipts`. The pair pins the calibration from both sides — too-strict filter shows up as STRONG missing `immune:reasoned`; too-lenient attend shows up as WEAK landing `immune:reasoned` instead of `immune:no-receipts`.
 
+## Live installs (provenance, not promises)
+
+These two forks are installs you can click through right now. Each PR carries the label immune produced; each workflow file pins the immune version that produced it.
+
+| Fork | Upstream | Lang | Agent | Workflow | STRONG PR | WEAK PR |
+|---|---|---|---|---|---|---|
+| [kimjune01/bat](https://github.com/kimjune01/bat) | [sharkdp/bat](https://github.com/sharkdp/bat) (~58k★) | Rust | gemini | [`immune.yml@v0.4`](https://github.com/kimjune01/bat/blob/master/.github/workflows/immune.yml) | [#1 column-aware tab expansion](https://github.com/kimjune01/bat/pull/1) → `immune:reasoned` | [#2 simplify StyleComponentList](https://github.com/kimjune01/bat/pull/2) → `immune:no-receipts` |
+| [kimjune01/sptlrx](https://github.com/kimjune01/sptlrx) | [raitonoberu/sptlrx](https://github.com/raitonoberu/sptlrx) (~1.4k★) | Go | claude | [`immune.yml@v0.4`](https://github.com/kimjune01/sptlrx/blob/master/.github/workflows/immune.yml) | [#2 propagate provider.Lyrics error](https://github.com/kimjune01/sptlrx/pull/2) → `immune:reasoned` | [#1 lrclib 404 handling](https://github.com/kimjune01/sptlrx/pull/1) → `immune:no-receipts` |
+
+Provenance chain: this README → the linked PR (current label) → the PR's "Checks" tab (the immune workflow run) → that run's logs (filter verdict + attend's K=3 synthesis comment) → the workflow file (pinned to a specific tag) → [`kimjune01/immune` at that tag](https://github.com/kimjune01/immune/tags) (the action source). Anyone reading top-down can verify every claim back to the action source.
+
 ## License
 
 Dual: **code is AGPL-3.0**, **prose/specs/skills are [CC-BY-SA-NS](https://june.kim/cc-by-sa-ns)** (commercial OK, attribution required, derivatives carry the same license). Per [Canon](https://june.kim/canon), prose precise enough to compile to behavior is source code — so the spec prose is licensed as carefully as the executable. See `LICENSE` for the split.

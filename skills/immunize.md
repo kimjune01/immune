@@ -7,6 +7,13 @@ allowed-tools: Read, Write, Bash, Grep, AskUserQuestion
 
 # Install immune in one of your forks
 
+> ⚠️ **Random skill from the internet.** Before invoking:
+> - Read this file end-to-end, or have your agent summarize the side effects
+> - **Will write to your target fork:** one workflow file, two branches, two PRs, two PR comments, three labels
+> - **Will read:** your `gh auth status` token + (if elicited) the secret for your chosen agent (Anthropic / OpenAI / Gemini / GCP / AWS)
+> - **Will talk to:** GitHub + (during attend) the LLM provider behind your chosen agent CLI — nothing else
+> - At your own risk
+
 This skill installs immune into a fork **you own**, then proves the install worked by opening two code-gen PRs: STRONG (real bug-fix with full receipts → expected `immune:trusted`) and WEAK (haiku-generated, no receipts → expected `immune:suspect`). The pair of verdicts IS the install attestation.
 
 ## Flow

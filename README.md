@@ -91,6 +91,12 @@ Without it, immune and your CI run independently; with it, your CI saves runner-
 
 For a guided install with self-attesting verdict pair, see the [`/immunize` skill](skills/immunize.md) — it generates two real code-gen PRs against your fork (one with full receipts, one organic-weak via haiku) so you can watch immune label its own self-test before trusting it on real traffic.
 
+> ⚠️ **Skills are prose-that-compiles-to-behavior.** Before invoking [`/immunize`](skills/immunize.md):
+> - Read the source, or have your agent summarize the side effects
+> - Verify what it claims to do matches what this README claims
+> - Check which credentials it asks to read
+> - At your own risk
+
 ## Label vocabulary
 
 Labels are **terminal-only**. Three labels, all subtle gray (`#EDEDED`) — they group as "system labels" instead of competing with whatever loud labels you already use.

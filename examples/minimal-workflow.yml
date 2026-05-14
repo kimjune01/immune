@@ -54,31 +54,27 @@ jobs:
           THIS_WORKFLOW: ${{ github.workflow }}
         run: |
           set -euo pipefail
-          # Poll check-runs on the PR's HEAD commit. Skip our own workflow's
-          # checks (otherwise we'd deadlock waiting on ourselves).
+          # Poll WORKFLOW_RUNS (not check_runs) for the PR's HEAD SHA. We
+          # filter by workflow NAME — our own workflow (filter+attend jobs)
+          # is one workflow_run; the maintainer's CI is another. Querying
+          # check_runs and filtering by name was wrong: check_runs are named
+          # by JOB ("filter", "attend"), so the workflow-name comparison
+          # never matched and we waited on our own attend job forever.
           while true; do
-            checks=$(gh api --paginate "repos/${REPO}/commits/${PR_SHA}/check-runs")
-            pending=$(echo "$checks" | jq --arg w "$THIS_WORKFLOW" '
-              [.check_runs[]
-                 | select(.name != $w)
-                 | select(.name | startswith($w + " /") | not)
-                 | select(.status != "completed")
-              ] | length')
-            failures=$(echo "$checks" | jq --arg w "$THIS_WORKFLOW" '
-              [.check_runs[]
-                 | select(.name != $w)
-                 | select(.name | startswith($w + " /") | not)
-                 | select(.conclusion == "failure" or .conclusion == "cancelled" or .conclusion == "timed_out")
-              ] | length')
+            runs=$(gh api --paginate "repos/${REPO}/actions/runs?head_sha=${PR_SHA}&event=pull_request_target")
+            others=$(echo "$runs" | jq --arg w "$THIS_WORKFLOW" '
+              [.workflow_runs[] | select(.name != $w)]')
+            pending=$(echo "$others" | jq '[.[] | select(.status != "completed")] | length')
+            failures=$(echo "$others" | jq '[.[] | select(.conclusion == "failure" or .conclusion == "cancelled" or .conclusion == "timed_out")] | length')
             if [ "$failures" -gt 0 ]; then
               echo "::notice::Maintainer CI failed/cancelled — attend exits silently (no label change; the red X on CI is enough signal)"
               exit 0
             fi
             if [ "$pending" -eq 0 ]; then
-              echo "All maintainer CI checks completed successfully — proceeding to attend"
+              echo "All maintainer CI workflow runs completed successfully — proceeding to attend"
               break
             fi
-            echo "Waiting on $pending pending check(s)..."
+            echo "Waiting on $pending pending workflow run(s)..."
             sleep 20
           done
 

@@ -1,0 +1,85 @@
+# immune-attend — T2+T3: LLM legibility + synthesis, optional test replay.
+#
+# Fires only when label `immune:t1-pass` is added (by immune-filter or by
+# a maintainer). The invariant is enforced by the workflow `if:` condition,
+# not by this action — so attend NEVER attends to pre-filtered PRs.
+#
+# Spends ~$0.01-$0.05/PR on the LLM call. Test replay (T3) costs runner
+# minutes. Output: replaces immune:t1-pass with one of:
+#   immune:trusted     → maintainer fast-lane
+#   immune:suspect     → read carefully
+#   immune:needs-human → escalation (e.g. attestation tampered)
+
+name: 'immune-attend'
+description: 'T2+T3 of the immune pipeline. LLM-driven legibility + synthesis. Only fires when immune:t1-pass is set.'
+inputs:
+  github-token:
+    description: 'GitHub token for API access'
+    required: true
+    default: ${{ github.token }}
+  anthropic-api-key:
+    description: 'Anthropic API key. Required for T2.'
+    required: true
+  model:
+    description: '`sonnet` (default, ~$0.01/PR) or `opus` (SOTA, ~$0.05/PR).'
+    required: false
+    default: 'sonnet'
+  replay:
+    description: 'Run T3 test replay in sandbox. `false` (default) skips. `true` runs the documented test_cmd.'
+    required: false
+    default: 'false'
+
+runs:
+  using: 'composite'
+  steps:
+    - name: Set up Python
+      uses: actions/setup-python@v5
+      with:
+        python-version: '3.11'
+
+    - name: Run immune attend
+      shell: bash
+      env:
+        GITHUB_TOKEN: ${{ inputs.github-token }}
+        ANTHROPIC_API_KEY: ${{ inputs.anthropic-api-key }}
+        IMMUNE_MODEL: ${{ inputs.model }}
+        IMMUNE_REPLAY: ${{ inputs.replay }}
+        PR_NUMBER: ${{ github.event.pull_request.number }}
+        REPO: ${{ github.repository }}
+      run: |
+        set -euo pipefail
+        SCRIPT="${{ github.action_path }}/../immune.py"
+
+        # Defensive: refuse to run unless immune:t1-pass is on the PR.
+        # The workflow `if:` condition is the primary gate; this is belt-and-suspenders.
+        HAS_PASS=$(gh api "repos/${REPO}/issues/${PR_NUMBER}/labels" --jq '[.[].name] | index("immune:t1-pass")' 2>/dev/null || echo "null")
+        if [ "$HAS_PASS" = "null" ] || [ -z "$HAS_PASS" ]; then
+          echo "immune-attend: refusing — PR is not labeled immune:t1-pass" >&2
+          exit 0
+        fi
+
+        python "$SCRIPT" attend "${REPO}#${PR_NUMBER}" --format json > /tmp/immune-attend.json
+        VERDICT=$(python -c 'import json; print(json.load(open("/tmp/immune-attend.json"))["verdict"])')
+        python "$SCRIPT" attend "${REPO}#${PR_NUMBER}" --format markdown > /tmp/immune-attend.md
+
+        # Update or post the synthesis comment
+        EXISTING=$(gh api --paginate "repos/${REPO}/issues/${PR_NUMBER}/comments" \
+          --jq '.[] | select(.body | startswith("### immune attend")) | .id' 2>/dev/null | head -1 || true)
+        if [ -n "$EXISTING" ]; then
+          gh api "repos/${REPO}/issues/comments/${EXISTING}" -X PATCH -F body=@/tmp/immune-attend.md > /dev/null
+        else
+          gh api "repos/${REPO}/issues/${PR_NUMBER}/comments" -F body=@/tmp/immune-attend.md > /dev/null
+        fi
+
+        # Replace immune:t1-pass with verdict label
+        gh api "repos/${REPO}/issues/${PR_NUMBER}/labels/immune%3At1-pass" -X DELETE > /dev/null 2>&1 || true
+
+        case "$VERDICT" in
+          trusted)     LABEL="immune:trusted"     ;;
+          suspect)     LABEL="immune:suspect"     ;;
+          needs_human) LABEL="immune:needs-human" ;;
+          *)           LABEL="immune:unknown"     ;;
+        esac
+        gh api "repos/${REPO}/issues/${PR_NUMBER}/labels" -f "labels[]=${LABEL}" > /dev/null 2>&1 || true
+
+        echo "immune-attend: ${VERDICT} → ${LABEL}"

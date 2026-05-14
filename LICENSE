@@ -1,0 +1,32 @@
+Dual licensing
+==============
+
+This repository contains two kinds of work, each under a different license.
+
+CODE (everything compilable / executable)
+-----------------------------------------
+Source code, action.yml, configuration, and any executable artifact:
+**GNU Affero General Public License v3.0** (AGPL-3.0).
+
+Full text: https://www.gnu.org/licenses/agpl-3.0.txt
+
+Code derived from this code is AGPL. Network-deployed forks must publish source.
+
+SKILLS / SPEC PROSE (prose that compiles to behavior)
+-----------------------------------------------------
+README.md, docs, skill specs, prompt templates, and any prose precise enough
+that an agent can compile it to behavior:
+**[CC-BY-SA-NS](https://june.kim/cc-by-sa-ns)** — Attribution + ShareAlike + No-Surveillance.
+
+NS (no-surveillance / network clause) closes the SaaS loophole that plain CC-BY-SA leaves open. CC-BY-SA's share-alike clause triggers on *distribution* — giving someone a copy. A company can read CC-BY-SA prose, compile it to code via an agent, serve the code as a SaaS product, and argue they never distributed the derivative. CC-BY-SA-NS treats network use as distribution, the same move AGPL made for code. See https://june.kim/cc-by-sa-ns for the canonical definition.
+
+Commercial use permitted. Attribution required to https://github.com/kimjune01/immune.
+Derivative orchestration prose carries the same license — share alike across
+forks. The receipts-validation pattern is a commons; specs improve when forks
+publish back. See https://june.kim/canon for the canonical argument: prose
+that compiles to code is source.
+
+The split exists so commercial maintainers can install the action and run it
+on their repos (AGPL on the code permits use; AGPL only kicks in on
+*modification* of the code), while spec/prose forks must remain readable
+and republishable so the receipts-discipline norm itself stays a commons.

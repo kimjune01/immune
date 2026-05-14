@@ -1,0 +1,72 @@
+# immune-filter — T0+T1: cheap mechanical checks + receipts presence/sha verification.
+#
+# Fires on PR open. Output: adds one of these labels to the PR:
+#   immune:t1-pass   → ready for attend
+#   immune:reject    → cheap reject (duplicate, ai-policy, missing receipts)
+#
+# Never calls an LLM. Never runs a sandbox. Sub-second to ~few seconds.
+# Free to run; safe to enable on every repo.
+
+name: 'immune-filter'
+description: 'T0+T1 of the immune pipeline. Mechanical filter + receipts verification. Adds immune:t1-pass or immune:reject label.'
+inputs:
+  github-token:
+    description: 'GitHub token for API access'
+    required: true
+    default: ${{ github.token }}
+  mode:
+    description: '`advisory` (label only) or `gate` (auto-close on reject).'
+    required: false
+    default: 'advisory'
+
+runs:
+  using: 'composite'
+  steps:
+    - name: Set up Python
+      uses: actions/setup-python@v5
+      with:
+        python-version: '3.11'
+
+    - name: Run immune filter
+      shell: bash
+      env:
+        GITHUB_TOKEN: ${{ inputs.github-token }}
+        PR_NUMBER: ${{ github.event.pull_request.number }}
+        REPO: ${{ github.repository }}
+        MODE: ${{ inputs.mode }}
+      run: |
+        set -euo pipefail
+        SCRIPT="${{ github.action_path }}/../immune.py"
+
+        python "$SCRIPT" filter "${REPO}#${PR_NUMBER}" --format json > /tmp/immune-filter.json
+        VERDICT=$(python -c 'import json; print(json.load(open("/tmp/immune-filter.json"))["verdict"])')
+        python "$SCRIPT" filter "${REPO}#${PR_NUMBER}" --format markdown > /tmp/immune-filter.md
+
+        # Update or post the receipt comment
+        EXISTING=$(gh api --paginate "repos/${REPO}/issues/${PR_NUMBER}/comments" \
+          --jq '.[] | select(.body | startswith("### immune filter")) | .id' 2>/dev/null | head -1 || true)
+        if [ -n "$EXISTING" ]; then
+          gh api "repos/${REPO}/issues/comments/${EXISTING}" -X PATCH -F body=@/tmp/immune-filter.md > /dev/null
+        else
+          gh api "repos/${REPO}/issues/${PR_NUMBER}/comments" -F body=@/tmp/immune-filter.md > /dev/null
+        fi
+
+        # Strip prior immune:* labels, then apply current one
+        gh api "repos/${REPO}/issues/${PR_NUMBER}/labels" --jq '.[].name' 2>/dev/null \
+          | grep '^immune:' | while read -r l; do
+              gh api "repos/${REPO}/issues/${PR_NUMBER}/labels/$(printf '%s' "$l" | jq -sRr @uri)" -X DELETE > /dev/null 2>&1 || true
+            done
+
+        case "$VERDICT" in
+          pass)   LABEL="immune:t1-pass" ;;
+          reject) LABEL="immune:reject"  ;;
+          *)      LABEL="immune:unknown" ;;
+        esac
+        gh api "repos/${REPO}/issues/${PR_NUMBER}/labels" -f "labels[]=${LABEL}" > /dev/null 2>&1 || true
+
+        if [ "$MODE" = "gate" ] && [ "$VERDICT" = "reject" ]; then
+          gh api "repos/${REPO}/pulls/${PR_NUMBER}" -X PATCH -f state=closed > /dev/null
+          echo "immune-filter: CLOSED (verdict=reject, mode=gate)"
+        else
+          echo "immune-filter: ${VERDICT} → ${LABEL}"
+        fi

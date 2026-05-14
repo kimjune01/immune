@@ -1,0 +1,39 @@
+# Drop in .github/workflows/immune.yml
+#
+# Two jobs, label-driven dispatch. Filter fires on PR open. Attend fires
+# only when filter (or a maintainer) adds immune:t1-pass. Same interface
+# whether the label was set by CI or by a human.
+
+name: immune
+on:
+  pull_request:
+    types: [opened, synchronize, reopened]
+  pull_request_target:
+    types: [labeled]
+
+permissions:
+  contents: read
+  pull-requests: write
+  issues: write
+
+jobs:
+  filter:
+    if: github.event_name == 'pull_request'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: kimjune01/immune/filter@v0
+        with:
+          mode: advisory  # or `gate` to auto-close on T0/T1 reject
+
+  attend:
+    if: >
+      github.event_name == 'pull_request_target' &&
+      github.event.action == 'labeled' &&
+      github.event.label.name == 'immune:t1-pass'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: kimjune01/immune/attend@v0
+        with:
+          anthropic-api-key: ${{ secrets.ANTHROPIC_API_KEY }}
+          model: sonnet  # or `opus` for SOTA synthesis
+          replay: 'false'  # set 'true' to enable T3 sandbox test replay

@@ -1,0 +1,13 @@
+__pycache__/
+*.pyc
+.venv/
+venv/
+*.egg-info/
+dist/
+build/
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+*.swp
+.DS_Store
+# no hidden state — immune writes nothing to disk under the maintainer's repo

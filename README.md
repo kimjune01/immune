@@ -91,11 +91,11 @@ Without it, immune and your CI run independently; with it, your CI saves runner-
 
 For a guided install with self-attesting verdict pair, see the [`/immunize` skill](skills/immunize.md) — it generates two real code-gen PRs against your fork (one with full receipts, one organic-weak via haiku) so you can watch immune label its own self-test before trusting it on real traffic.
 
-> ⚠️ **Skills are prose-that-compiles-to-behavior.** Before invoking [`/immunize`](skills/immunize.md):
-> - Read the source, or have your agent summarize the side effects
-> - Verify what it claims to do matches what this README claims
-> - Check which credentials it asks to read
-> - At your own risk
+> ⚠️ **Before you run [`/immunize`](skills/immunize.md):**
+> - Open the file. Read it, or paste it to your agent and ask what it does.
+> - The skill instructs your agent to make real changes to a real GitHub repo.
+> - Confirm those changes match what this README says before you let it run.
+> - You are responsible for what your agent does.
 
 ## Label vocabulary
 

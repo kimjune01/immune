@@ -7,12 +7,12 @@ allowed-tools: Read, Write, Bash, Grep, AskUserQuestion
 
 # Install immune in one of your forks
 
-> ⚠️ **Random skill from the internet.** Before invoking:
-> - Read this file end-to-end, or have your agent summarize the side effects
-> - **Will write to your target fork:** one workflow file, two branches, two PRs, two PR comments, three labels
-> - **Will read:** your `gh auth status` token + (if elicited) the secret for your chosen agent (Anthropic / OpenAI / Gemini / GCP / AWS)
-> - **Will talk to:** GitHub + (during attend) the LLM provider behind your chosen agent CLI — nothing else
-> - At your own risk
+> ⚠️ **Before you run this:**
+> - Read this file end-to-end, or ask your agent to summarize what it does.
+> - **It will change your target fork:** one workflow file, two branches, two PRs, two PR comments, three labels.
+> - **It will use your credentials:** your GitHub token, plus the API key for whichever agent you pick (Anthropic, OpenAI, Gemini, GCP, or AWS).
+> - **It will only talk to:** GitHub, and the LLM provider for your chosen agent. Nothing else.
+> - You are responsible for what your agent does.
 
 This skill installs immune into a fork **you own**, then proves the install worked by opening two code-gen PRs: STRONG (real bug-fix with full receipts → expected `immune:trusted`) and WEAK (haiku-generated, no receipts → expected `immune:suspect`). The pair of verdicts IS the install attestation.
 

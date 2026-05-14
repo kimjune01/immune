@@ -124,7 +124,15 @@ Only THREE terminal labels (immune is minimal about state-as-labels):
 
 No `immune:needs-human` — escalation should reveal the specific shortcoming in the synthesis comment, not hide behind a generic label.
 
-Print the `gh label create` script in a fenced code block, one line per label, `|| true` suffixed.
+**Color: all three use `#EDEDED`** (subtle gray). They group visually as "system labels" instead of competing with whatever loud labels the maintainer is already using for their own categorization. Semantic distinction lives in the name + the synthesis comment, not in screaming colors.
+
+Print the `gh label create` script in a fenced code block, one line per label, color `EDEDED`, `|| true` suffixed:
+
+```bash
+gh label create immune:reject  --color EDEDED --description "filter T0+T1: failed mechanical checks" --repo <owner/repo> || true
+gh label create immune:trusted --color EDEDED --description "attend T2+T3: receipts verified, fast-lane review" --repo <owner/repo> || true
+gh label create immune:suspect --color EDEDED --description "attend: receipts thin or HG flagged risk; read the synthesis comment" --repo <owner/repo> || true
+```
 
 ### E. Secrets / token punch list (PROMINENT)
 

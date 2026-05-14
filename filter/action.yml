@@ -41,11 +41,17 @@ runs:
         REPO: ${{ github.repository }}
         MODE: ${{ inputs.mode }}
       run: |
-        set -euo pipefail
+        set -xeuo pipefail
         SCRIPT="${{ github.action_path }}/../immune.py"
 
         # `|| true` so set -e doesn't kill before we can dump stderr.
         python "$SCRIPT" filter "${REPO}#${PR_NUMBER}" --format json > /tmp/immune-filter.json 2> /tmp/immune-filter.err || true
+        echo "--- python exit; json size: $(wc -c < /tmp/immune-filter.json), err size: $(wc -c < /tmp/immune-filter.err) ---"
+        echo "--- stderr file ---"
+        cat /tmp/immune-filter.err 2>&1 || true
+        echo "--- json file (first 500 chars) ---"
+        head -c 500 /tmp/immune-filter.json 2>&1 || true
+        echo "--- end inspection ---"
         if [ ! -s /tmp/immune-filter.json ]; then
           echo "::error::immune-filter: empty JSON output (python crashed)"
           echo "--- stderr ---"

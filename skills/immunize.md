@@ -225,7 +225,7 @@ When both agents return, both PRs exist on the fork. The immune workflow fires o
 
 ## Phase 7: Verification (the demonstration)
 
-Print:
+Print, **without writing any files to the target repo**:
 
 ```
 Installed immune in <owner/repo>.
@@ -233,12 +233,18 @@ Installed immune in <owner/repo>.
 STRONG code-gen PR (expect immune:trusted): <url>
 WEAK   code-gen PR (expect immune:suspect): <url>
 
-Watch with:
-  gh pr view <strong-url> --json labels,statusCheckRollup
-  gh pr view <weak-url>   --json labels,statusCheckRollup
+Verify in ~2 min once workflows fire:
 
-Wait ~2 min for the workflows to fire, then re-check.
+  STRONG (expect immune:trusted):
+    gh pr view <strong-pr-num> --repo <owner/repo> --json labels --jq '.labels[].name'
+
+  WEAK   (expect immune:suspect):
+    gh pr view <weak-pr-num>   --repo <owner/repo> --json labels --jq '.labels[].name'
 ```
+
+The convention IS the contract: `immune/codegen-strong` → `immune:trusted`, `immune/codegen-weak` → `immune:suspect`. Maintainer eyeballs the labels. No files are committed to the target repo for this purpose — install-level meta lives in the maintainer's terminal output, not their git history.
+
+Per-PR attestation files (e.g. `.immune/codegen-strong-attestation.txt` on the strong branch) DO live in the contributor's branch — they're load-bearing receipts that immune fetches and sha256-verifies. If the maintainer merges a strong PR, that attestation lands in master; squash-merging or excluding the path on merge is the maintainer's call. (The receipts are useful provenance even after merge; not pollution.)
 
 The verdict pair is the proof:
 

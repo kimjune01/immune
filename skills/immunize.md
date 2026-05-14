@@ -50,12 +50,20 @@ Preview-then-confirm is the default. There is no `--dry-run` flag because **the 
 
 Cache to scratchpad — do not re-fetch.
 
-## Phase 2: Inference
+## Phase 2: Inference (idempotent — re-running /immunize is safe)
+
+The skill is **idempotent**: re-running it on a repo that's already installed should be a no-op (or upgrade), not a refusal. Each existing artifact is detected and reconciled, not duplicated.
 
 | If | Then |
 |---|---|
-| `.github/workflows/immune.yml` exists | **Refuse** |
-| Any `immune:*` label exists | **Refuse** unless `--force` |
+| `.github/workflows/immune.yml` exists with the current template's `kimjune01/immune/{filter,attend}@<current-version>` pin | **Skip workflow write**; report "already at version X" |
+| `.github/workflows/immune.yml` exists pinned to an older version | **Offer upgrade**: render diff, ask before overwriting |
+| `.github/workflows/immune.yml` exists but uses a hand-modified shape | **Diff and pause**: print the diff against the current template; let the user decide whether to overwrite |
+| `immune:*` labels exist with `#EDEDED` color | **Skip label create** (idempotent) |
+| `immune:*` labels exist with a different color | **Update color** (`gh label edit`) to `#EDEDED` |
+| Branch `immune/codegen-strong` exists | **Skip strong code-gen**; reuse existing branch and ensure PR is open |
+| Branch `immune/codegen-weak` exists | **Skip weak code-gen**; reuse existing branch and ensure PR is open |
+| PR teaching comment already posted (detect by `### immune install — STRONG\|WEAK leg (teaching note)` prefix) | **Skip comment post**; or update if outdated |
 | AGENTS.md prohibits AI contributions | **Refuse** |
 | AGENTS.md mentions disclosure / quality-gate | `mode: gate`, `replay: true` |
 | `closure_rate > 0.4` | `mode: gate` |
@@ -321,10 +329,16 @@ Once verdicts match predictions, the install is attested. Leave the PRs open as 
 Refuse hard:
 - Path is not a git repo, or origin is not owned by you
 - Working tree is dirty
-- `.github/workflows/immune.yml` already exists
-- Any `immune:*` label already exists (without `--force`)
 - AGENTS.md prohibits AI contributions outright
 - `gh` CLI lacks `workflow` scope (would block the push)
+
+Do NOT refuse on:
+- Existing `.github/workflows/immune.yml` — diff and reconcile (Phase 2 idempotency table)
+- Existing `immune:*` labels — reuse, recolor if needed
+- Existing `immune/codegen-{strong,weak}` branches or PRs — reuse, refresh
+- Existing teaching comments — skip or update
+
+Re-running `/immunize` on an already-installed repo should be a safe no-op. The exit message is "already installed at version X; verify with: ..." rather than an error.
 
 ## Why a skill, not a script
 

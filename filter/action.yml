@@ -41,17 +41,11 @@ runs:
         REPO: ${{ github.repository }}
         MODE: ${{ inputs.mode }}
       run: |
-        set -xeuo pipefail
+        set -euo pipefail
         SCRIPT="${{ github.action_path }}/../immune.py"
 
         # `|| true` so set -e doesn't kill before we can dump stderr.
         python "$SCRIPT" filter "${REPO}#${PR_NUMBER}" --format json > /tmp/immune-filter.json 2> /tmp/immune-filter.err || true
-        echo "--- python exit; json size: $(wc -c < /tmp/immune-filter.json), err size: $(wc -c < /tmp/immune-filter.err) ---"
-        echo "--- stderr file ---"
-        cat /tmp/immune-filter.err 2>&1 || true
-        echo "--- json file (first 500 chars) ---"
-        head -c 500 /tmp/immune-filter.json 2>&1 || true
-        echo "--- end inspection ---"
         if [ ! -s /tmp/immune-filter.json ]; then
           echo "::error::immune-filter: empty JSON output (python crashed)"
           echo "--- stderr ---"
@@ -75,9 +69,10 @@ runs:
         fi
 
         # Only label on terminal reject (no transient t1-pass label).
-        # Strip any stale immune:* labels first to keep the state clean.
+        # Strip any stale immune:* labels first. awk (not grep) so a no-match
+        # case doesn't fail the pipeline under `set -o pipefail`.
         gh api "repos/${REPO}/issues/${PR_NUMBER}/labels" --jq '.[].name' 2>/dev/null \
-          | grep '^immune:' | while read -r l; do
+          | awk '/^immune:/' | while read -r l; do
               gh api "repos/${REPO}/issues/${PR_NUMBER}/labels/$(printf '%s' "$l" | jq -sRr @uri)" -X DELETE > /dev/null 2>&1 || true
             done
 

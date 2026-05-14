@@ -177,8 +177,9 @@ runs:
         fi
 
         # Strip any stale immune:* labels then apply the terminal verdict.
+        # awk (not grep) so a no-match case doesn't fail under set -o pipefail.
         gh api "repos/${REPO}/issues/${PR_NUMBER}/labels" --jq '.[].name' 2>/dev/null \
-          | grep '^immune:' | while read -r l; do
+          | awk '/^immune:/' | while read -r l; do
               gh api "repos/${REPO}/issues/${PR_NUMBER}/labels/$(printf '%s' "$l" | jq -sRr @uri)" -X DELETE > /dev/null 2>&1 || true
             done
 

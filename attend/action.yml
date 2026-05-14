@@ -160,10 +160,12 @@ runs:
           exit 0
         fi
 
-        python "$SCRIPT" attend "${REPO}#${PR_NUMBER}" --format json > /tmp/immune-attend.json 2> /tmp/immune-attend.err
+        python "$SCRIPT" attend "${REPO}#${PR_NUMBER}" --format json > /tmp/immune-attend.json 2> /tmp/immune-attend.err || true
         if [ ! -s /tmp/immune-attend.json ]; then
-          echo "immune-attend: empty JSON output" >&2
-          cat /tmp/immune-attend.err >&2 || true
+          echo "::error::immune-attend: empty JSON output (python crashed)"
+          echo "--- stderr ---"
+          cat /tmp/immune-attend.err 2>&1 || true
+          echo "--- end stderr ---"
           exit 1
         fi
         VERDICT=$(python -c 'import json; print(json.load(open("/tmp/immune-attend.json"))["verdict"])')

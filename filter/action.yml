@@ -38,11 +38,15 @@ runs:
         set -euo pipefail
         SCRIPT="${{ github.action_path }}/../immune.py"
 
-        # stderr → stdout so tracebacks are visible in the runner log
-        python "$SCRIPT" filter "${REPO}#${PR_NUMBER}" --format json > /tmp/immune-filter.json 2> /tmp/immune-filter.err
+        # `|| true` so set -e doesn't kill before we can dump stderr.
+        # Without this, a python crash exits the step immediately and the err
+        # file is never read — making the failure invisible in the runner log.
+        python "$SCRIPT" filter "${REPO}#${PR_NUMBER}" --format json > /tmp/immune-filter.json 2> /tmp/immune-filter.err || true
         if [ ! -s /tmp/immune-filter.json ]; then
-          echo "immune-filter: empty JSON output" >&2
-          cat /tmp/immune-filter.err >&2 || true
+          echo "::error::immune-filter: empty JSON output (python crashed)"
+          echo "--- stderr ---"
+          cat /tmp/immune-filter.err 2>&1 || true
+          echo "--- end stderr ---"
           exit 1
         fi
         VERDICT=$(python -c 'import json; print(json.load(open("/tmp/immune-filter.json"))["verdict"])')

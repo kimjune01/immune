@@ -1,6 +1,6 @@
 # immune
 
-**We're building `(PR) → merged`.**
+**We're building [`(PR) → merged`](https://june.kim/pr-to-merged).**
 
 PR comes in, merge or close, with the maintainer's confidence calibrated by evidence the maintainer didn't have to produce themselves. Filter and attend are intermediate stages that exist only to make that transition cheap and trustworthy. Everything else is plumbing.
 

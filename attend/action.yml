@@ -4,7 +4,11 @@
 # a maintainer). The invariant is enforced by the workflow `if:` condition,
 # not by this action — so attend NEVER attends to pre-filtered PRs.
 #
-# Spends ~$0.01-$0.05/PR on the LLM call. Test replay (T3) costs runner
+# Provider: pick exactly one (anthropic | vertex_ai | bedrock | openai).
+# If `provider` is blank, the action auto-detects from which credentials
+# are present, in priority order: vertex_ai > bedrock > openai > anthropic.
+#
+# Cost: ~$0.01-$0.05/PR for the LLM call. Test replay (T3) costs runner
 # minutes. Output: replaces immune:t1-pass with one of:
 #   immune:trusted     → maintainer fast-lane
 #   immune:suspect     → read carefully
@@ -17,17 +21,51 @@ inputs:
     description: 'GitHub token for API access'
     required: true
     default: ${{ github.token }}
-  anthropic-api-key:
-    description: 'Anthropic API key. Required for T2.'
-    required: true
+  provider:
+    description: 'anthropic | vertex_ai | bedrock | openai. Blank = auto-detect from credentials.'
+    required: false
+    default: ''
   model:
-    description: '`sonnet` (default, ~$0.01/PR) or `opus` (SOTA, ~$0.05/PR).'
+    description: 'Alias (haiku|sonnet|opus) for Claude-family providers, or explicit model id (e.g. gpt-5 for openai). Default: sonnet.'
     required: false
     default: 'sonnet'
   replay:
     description: 'Run T3 test replay in sandbox. `false` (default) skips. `true` runs the documented test_cmd.'
     required: false
     default: 'false'
+
+  # ---- Anthropic direct ----
+  anthropic-api-key:
+    description: 'Anthropic API key. Used when provider=anthropic.'
+    required: false
+
+  # ---- OpenAI ----
+  openai-api-key:
+    description: 'OpenAI API key. Used when provider=openai.'
+    required: false
+
+  # ---- Google Vertex AI ----
+  google-application-credentials:
+    description: 'Either a path to a service-account JSON file, OR the raw JSON content (will be written to a temp file).'
+    required: false
+  vertexai-project:
+    description: 'GCP project id for Vertex.'
+    required: false
+  vertexai-location:
+    description: 'GCP region for Vertex (e.g. us-east5).'
+    required: false
+    default: 'us-east5'
+
+  # ---- AWS Bedrock ----
+  aws-access-key-id:
+    required: false
+  aws-secret-access-key:
+    required: false
+  aws-session-token:
+    required: false
+  aws-region:
+    required: false
+    default: 'us-east-1'
 
 runs:
   using: 'composite'
@@ -37,13 +75,42 @@ runs:
       with:
         python-version: '3.11'
 
+    - name: Install litellm
+      shell: bash
+      run: pip install --quiet 'litellm>=1.50'
+
+    - name: Materialize Vertex credentials (if inline JSON)
+      if: inputs.google-application-credentials != ''
+      shell: bash
+      env:
+        GAC_INPUT: ${{ inputs.google-application-credentials }}
+      run: |
+        set -euo pipefail
+        # If the input starts with `{`, treat it as raw JSON content; otherwise treat as a path.
+        if [ "${GAC_INPUT:0:1}" = "{" ]; then
+          TMP="$RUNNER_TEMP/gcp-sa.json"
+          printf '%s' "$GAC_INPUT" > "$TMP"
+          chmod 600 "$TMP"
+          echo "GOOGLE_APPLICATION_CREDENTIALS=$TMP" >> "$GITHUB_ENV"
+        else
+          echo "GOOGLE_APPLICATION_CREDENTIALS=$GAC_INPUT" >> "$GITHUB_ENV"
+        fi
+
     - name: Run immune attend
       shell: bash
       env:
         GITHUB_TOKEN: ${{ inputs.github-token }}
-        ANTHROPIC_API_KEY: ${{ inputs.anthropic-api-key }}
+        IMMUNE_PROVIDER: ${{ inputs.provider }}
         IMMUNE_MODEL: ${{ inputs.model }}
         IMMUNE_REPLAY: ${{ inputs.replay }}
+        ANTHROPIC_API_KEY: ${{ inputs.anthropic-api-key }}
+        OPENAI_API_KEY: ${{ inputs.openai-api-key }}
+        VERTEXAI_PROJECT: ${{ inputs.vertexai-project }}
+        VERTEXAI_LOCATION: ${{ inputs.vertexai-location }}
+        AWS_ACCESS_KEY_ID: ${{ inputs.aws-access-key-id }}
+        AWS_SECRET_ACCESS_KEY: ${{ inputs.aws-secret-access-key }}
+        AWS_SESSION_TOKEN: ${{ inputs.aws-session-token }}
+        AWS_REGION: ${{ inputs.aws-region }}
         PR_NUMBER: ${{ github.event.pull_request.number }}
         REPO: ${{ github.repository }}
       run: |

@@ -8,9 +8,18 @@ Usage:
     immune scan <pr-url>
     immune scan owner/repo#123
 
-Env:
-    GITHUB_TOKEN        required
-    ANTHROPIC_API_KEY   optional (legibility check; ~$0.001/PR)
+Env (filter):
+    GITHUB_TOKEN                       required
+
+Env (attend — pick ONE provider; auto-detected in this priority order):
+    IMMUNE_PROVIDER                    optional override: anthropic|vertex_ai|bedrock|openai
+    IMMUNE_MODEL                       alias (haiku|sonnet|opus) for Claude-family,
+                                       or explicit model id for openai. default: sonnet.
+
+    vertex_ai:   GOOGLE_APPLICATION_CREDENTIALS, VERTEXAI_PROJECT, VERTEXAI_LOCATION
+    bedrock:     AWS_ACCESS_KEY_ID, AWS_SECRET_ACCESS_KEY, AWS_REGION
+    openai:      OPENAI_API_KEY
+    anthropic:   ANTHROPIC_API_KEY
 """
 from __future__ import annotations
 
@@ -285,11 +294,66 @@ def attend_attestation(body: str) -> tuple[str | None, bool | None]:
     return path, actual == expected
 
 
+# Provider dispatch for the legibility LLM call. LiteLLM normalizes the four
+# common Claude/OpenAI-compatible endpoints behind one call site, so adding
+# a provider is a model-string change, not a new HTTP path.
+
+_MODEL_ALIASES = {
+    "anthropic": {
+        "haiku":  "claude-haiku-4-5-20251001",
+        "sonnet": "claude-sonnet-4-6",
+        "opus":   "claude-opus-4-7",
+    },
+    "vertex_ai": {
+        "haiku":  "claude-haiku-4-5@20251001",
+        "sonnet": "claude-sonnet-4-6",
+        "opus":   "claude-opus-4-7",
+    },
+    "bedrock": {
+        "haiku":  "anthropic.claude-haiku-4-5-20251001-v1:0",
+        "sonnet": "anthropic.claude-sonnet-4-6-v1:0",
+        "opus":   "anthropic.claude-opus-4-7-v1:0",
+    },
+}
+
+
+def _detect_provider() -> str | None:
+    explicit = os.environ.get("IMMUNE_PROVIDER")
+    if explicit:
+        return explicit
+    if os.environ.get("GOOGLE_APPLICATION_CREDENTIALS") or os.environ.get("VERTEXAI_PROJECT"):
+        return "vertex_ai"
+    if os.environ.get("AWS_ACCESS_KEY_ID") or os.environ.get("AWS_SESSION_TOKEN"):
+        return "bedrock"
+    if os.environ.get("OPENAI_API_KEY"):
+        return "openai"
+    if os.environ.get("ANTHROPIC_API_KEY"):
+        return "anthropic"
+    return None
+
+
+def _resolve_model(provider: str, model: str) -> str:
+    table = _MODEL_ALIASES.get(provider)
+    if table and model in table:
+        return table[model]
+    return model
+
+
 def attend_legibility(body: str, title: str, diff_summary: str) -> tuple[str | None, str | None]:
-    """LLM call to Haiku: WHY vs WHAT description check."""
-    api_key = os.environ.get("ANTHROPIC_API_KEY")
-    if not api_key:
-        return None, "skip (no ANTHROPIC_API_KEY)"
+    """WHY vs WHAT description check via the configured provider."""
+    provider = _detect_provider()
+    if not provider:
+        return None, "skip (no provider credentials in env)"
+
+    try:
+        import litellm  # type: ignore
+    except ImportError:
+        return None, "skip (litellm not installed; run `pip install litellm`)"
+
+    model_alias = os.environ.get("IMMUNE_MODEL", "sonnet")
+    model = _resolve_model(provider, model_alias)
+    litellm_model = model if "/" in model else f"{provider}/{model}"
+
     prompt = (
         f"PR title: {title}\nPR body: {body}\nDiff stats: {diff_summary}\n\n"
         "Does this PR description explain WHY the change is correct (root cause, "
@@ -297,27 +361,33 @@ def attend_legibility(body: str, title: str, diff_summary: str) -> tuple[str | N
         "diff)? Answer exactly: WHY or WHAT, then one sentence explaining your "
         "judgment."
     )
-    req = urllib.request.Request(
-        "https://api.anthropic.com/v1/messages",
-        data=json.dumps(
-            {
-                "model": "claude-haiku-4-5-20251001",
-                "max_tokens": 150,
-                "messages": [{"role": "user", "content": prompt}],
-            }
-        ).encode(),
-        headers={
-            "content-type": "application/json",
-            "x-api-key": api_key,
-            "anthropic-version": "2023-06-01",
-        },
-    )
+
+    extra: dict[str, Any] = {}
+    if provider == "vertex_ai":
+        if proj := os.environ.get("VERTEXAI_PROJECT"):
+            extra["vertex_project"] = proj
+        if loc := os.environ.get("VERTEXAI_LOCATION"):
+            extra["vertex_location"] = loc
+    elif provider == "bedrock":
+        if region := os.environ.get("AWS_REGION"):
+            extra["aws_region_name"] = region
+
     try:
-        with urllib.request.urlopen(req, timeout=15) as resp:
-            data = json.loads(resp.read())
+        resp = litellm.completion(
+            model=litellm_model,
+            messages=[{"role": "user", "content": prompt}],
+            max_tokens=150,
+            timeout=15,
+            **extra,
+        )
     except Exception as e:
-        return None, f"error: {e!s}"
-    text = data.get("content", [{}])[0].get("text", "").strip()
+        return None, f"error ({provider}): {e!s}"
+
+    try:
+        text = resp.choices[0].message.content.strip()
+    except (AttributeError, IndexError):
+        return None, f"error ({provider}): malformed response"
+
     if text.upper().startswith("WHY"):
         return "why", text
     if text.upper().startswith("WHAT"):

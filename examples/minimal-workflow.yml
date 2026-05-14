@@ -3,6 +3,10 @@
 # Two jobs, label-driven dispatch. Filter fires on PR open. Attend fires
 # only when filter (or a maintainer) adds immune:t1-pass. Same interface
 # whether the label was set by CI or by a human.
+#
+# Pick exactly ONE of the four provider blocks for `attend`. The action
+# auto-detects the provider from which credentials are present, so you
+# can also leave `provider:` blank.
 
 name: immune
 on:
@@ -32,8 +36,35 @@ jobs:
       github.event.label.name == 'immune:t1-pass'
     runs-on: ubuntu-latest
     steps:
+      # ---- Anthropic direct (default) ----
       - uses: kimjune01/immune/attend@v0
         with:
+          provider: anthropic
+          model: sonnet  # haiku | sonnet | opus
+          replay: 'false'
           anthropic-api-key: ${{ secrets.ANTHROPIC_API_KEY }}
-          model: sonnet  # or `opus` for SOTA synthesis
-          replay: 'false'  # set 'true' to enable T3 sandbox test replay
+
+      # ---- Google Vertex AI ----
+      # - uses: kimjune01/immune/attend@v0
+      #   with:
+      #     provider: vertex_ai
+      #     model: sonnet
+      #     google-application-credentials: ${{ secrets.GCP_SERVICE_ACCOUNT_JSON }}
+      #     vertexai-project: my-gcp-project
+      #     vertexai-location: us-east5
+
+      # ---- AWS Bedrock ----
+      # - uses: kimjune01/immune/attend@v0
+      #   with:
+      #     provider: bedrock
+      #     model: sonnet
+      #     aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
+      #     aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+      #     aws-region: us-east-1
+
+      # ---- OpenAI ----
+      # - uses: kimjune01/immune/attend@v0
+      #   with:
+      #     provider: openai
+      #     model: gpt-5  # explicit model id; aliases (haiku/sonnet/opus) don't apply
+      #     openai-api-key: ${{ secrets.OPENAI_API_KEY }}

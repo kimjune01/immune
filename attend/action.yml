@@ -1,62 +1,58 @@
-# immune-attend — T2+T3: LLM legibility + synthesis, optional test replay.
+# immune-attend — T2+T3: hypothesis-graph fan-out + legibility synthesis.
 #
 # Fires only when label `immune:t1-pass` is added (by immune-filter or by
 # a maintainer). The invariant is enforced by the workflow `if:` condition,
 # not by this action — so attend NEVER attends to pre-filtered PRs.
 #
-# Provider: pick exactly one (anthropic | vertex_ai | bedrock | openai).
-# If `provider` is blank, the action auto-detects from which credentials
-# are present, in priority order: vertex_ai > bedrock > openai > anthropic.
+# Runtime is a HEADLESS AGENT CLI (claude | codex | gemini), not a Python
+# SDK — no pip install, no third-party imports in the immune.py call site.
+# Three CLIs are pre-wired because they're the popular drop-ins; if you
+# want a different one, edit the install step.
 #
-# Cost: ~$0.01-$0.05/PR for the LLM call. Test replay (T3) costs runner
-# minutes. Output: replaces immune:t1-pass with one of:
+# Output: replaces immune:t1-pass with one of:
 #   immune:trusted     → maintainer fast-lane
 #   immune:suspect     → read carefully
 #   immune:needs-human → escalation (e.g. attestation tampered)
 
 name: 'immune-attend'
-description: 'T2+T3 of the immune pipeline. LLM-driven legibility + synthesis. Only fires when immune:t1-pass is set.'
+description: 'T2+T3 of the immune pipeline. Fans out K=3 hypothesis perturbations via a headless agent CLI, then synthesizes a verdict.'
 inputs:
   github-token:
     description: 'GitHub token for API access'
     required: true
     default: ${{ github.token }}
-  provider:
-    description: 'anthropic | vertex_ai | bedrock | openai. Blank = auto-detect from credentials.'
+  agent:
+    description: 'claude | codex | gemini. Blank = auto-detect from credentials.'
     required: false
     default: ''
-  model:
-    description: 'Alias (haiku|sonnet|opus) for Claude-family providers, or explicit model id (e.g. gpt-5 for openai). Default: sonnet.'
+  hg-fanout:
+    description: 'How many hypothesis perturbations to spawn in parallel. 0 disables HG generation.'
     required: false
-    default: 'sonnet'
+    default: '3'
   replay:
     description: 'Run T3 test replay in sandbox. `false` (default) skips. `true` runs the documented test_cmd.'
     required: false
     default: 'false'
 
-  # ---- Anthropic direct ----
+  # ---- claude (Anthropic family) ----
   anthropic-api-key:
-    description: 'Anthropic API key. Used when provider=anthropic.'
     required: false
-
-  # ---- OpenAI ----
-  openai-api-key:
-    description: 'OpenAI API key. Used when provider=openai.'
+  use-vertex:
+    description: 'Set to "1" to route claude CLI through Google Vertex AI.'
     required: false
-
-  # ---- Google Vertex AI ----
+    default: ''
+  use-bedrock:
+    description: 'Set to "1" to route claude CLI through AWS Bedrock.'
+    required: false
+    default: ''
   google-application-credentials:
-    description: 'Either a path to a service-account JSON file, OR the raw JSON content (will be written to a temp file).'
+    description: 'For Vertex: path to a service-account JSON file, OR raw JSON content (will be written to a temp file).'
     required: false
   vertexai-project:
-    description: 'GCP project id for Vertex.'
     required: false
   vertexai-location:
-    description: 'GCP region for Vertex (e.g. us-east5).'
     required: false
     default: 'us-east5'
-
-  # ---- AWS Bedrock ----
   aws-access-key-id:
     required: false
   aws-secret-access-key:
@@ -67,6 +63,14 @@ inputs:
     required: false
     default: 'us-east-1'
 
+  # ---- codex (OpenAI family) ----
+  openai-api-key:
+    required: false
+
+  # ---- gemini (Google) ----
+  gemini-api-key:
+    required: false
+
 runs:
   using: 'composite'
   steps:
@@ -75,9 +79,32 @@ runs:
       with:
         python-version: '3.11'
 
-    - name: Install litellm
+    - name: Set up Node (for headless agent CLIs)
+      uses: actions/setup-node@v4
+      with:
+        node-version: '20'
+
+    - name: Install the chosen agent CLI
       shell: bash
-      run: pip install --quiet 'litellm>=1.50'
+      env:
+        AGENT: ${{ inputs.agent }}
+      run: |
+        set -euo pipefail
+        # Auto-detect if not pinned. Mirrors immune.py:_agent().
+        if [ -z "${AGENT}" ]; then
+          if [ -n "${{ inputs.openai-api-key }}" ]; then AGENT=codex
+          elif [ -n "${{ inputs.gemini-api-key }}" ]; then AGENT=gemini
+          else AGENT=claude
+          fi
+        fi
+        echo "IMMUNE_AGENT=$AGENT" >> "$GITHUB_ENV"
+
+        case "$AGENT" in
+          claude) npm install -g @anthropic-ai/claude-code ;;
+          codex)  npm install -g @openai/codex ;;
+          gemini) npm install -g @google/gemini-cli ;;
+          *) echo "unknown agent: $AGENT" >&2; exit 1 ;;
+        esac
 
     - name: Materialize Vertex credentials (if inline JSON)
       if: inputs.google-application-credentials != ''
@@ -86,7 +113,6 @@ runs:
         GAC_INPUT: ${{ inputs.google-application-credentials }}
       run: |
         set -euo pipefail
-        # If the input starts with `{`, treat it as raw JSON content; otherwise treat as a path.
         if [ "${GAC_INPUT:0:1}" = "{" ]; then
           TMP="$RUNNER_TEMP/gcp-sa.json"
           printf '%s' "$GAC_INPUT" > "$TMP"
@@ -100,17 +126,26 @@ runs:
       shell: bash
       env:
         GITHUB_TOKEN: ${{ inputs.github-token }}
-        IMMUNE_PROVIDER: ${{ inputs.provider }}
-        IMMUNE_MODEL: ${{ inputs.model }}
+        IMMUNE_HG_FANOUT: ${{ inputs.hg-fanout }}
         IMMUNE_REPLAY: ${{ inputs.replay }}
+
+        # claude family
         ANTHROPIC_API_KEY: ${{ inputs.anthropic-api-key }}
-        OPENAI_API_KEY: ${{ inputs.openai-api-key }}
-        VERTEXAI_PROJECT: ${{ inputs.vertexai-project }}
-        VERTEXAI_LOCATION: ${{ inputs.vertexai-location }}
+        CLAUDE_CODE_USE_VERTEX: ${{ inputs.use-vertex }}
+        CLAUDE_CODE_USE_BEDROCK: ${{ inputs.use-bedrock }}
+        ANTHROPIC_VERTEX_PROJECT_ID: ${{ inputs.vertexai-project }}
+        CLOUD_ML_REGION: ${{ inputs.vertexai-location }}
         AWS_ACCESS_KEY_ID: ${{ inputs.aws-access-key-id }}
         AWS_SECRET_ACCESS_KEY: ${{ inputs.aws-secret-access-key }}
         AWS_SESSION_TOKEN: ${{ inputs.aws-session-token }}
         AWS_REGION: ${{ inputs.aws-region }}
+
+        # codex
+        OPENAI_API_KEY: ${{ inputs.openai-api-key }}
+
+        # gemini
+        GEMINI_API_KEY: ${{ inputs.gemini-api-key }}
+
         PR_NUMBER: ${{ github.event.pull_request.number }}
         REPO: ${{ github.repository }}
       run: |
@@ -149,4 +184,4 @@ runs:
         esac
         gh api "repos/${REPO}/issues/${PR_NUMBER}/labels" -f "labels[]=${LABEL}" > /dev/null 2>&1 || true
 
-        echo "immune-attend: ${VERDICT} → ${LABEL}"
+        echo "immune-attend: ${VERDICT} → ${LABEL} (agent=${IMMUNE_AGENT}, K=${IMMUNE_HG_FANOUT})"

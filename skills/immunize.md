@@ -1,7 +1,7 @@
 ---
 name: immunize
 description: Install immune into one of your own forks. Elicits target if not given, detects the fork's language and CI conventions, previews the workflow file and secrets punch list, then on confirmation commits + pushes + opens two PRs — a rigorous install PR that immune must label trusted, and a deliberately weak canary PR that immune must label reject. The install attestation is the pair.
-argument-hint: [local-fork-path] [--mode advisory|gate] [--model sonnet|opus]
+argument-hint: [local-fork-path] [--mode advisory|gate] [--agent claude|codex|gemini]
 allowed-tools: Read, Write, Bash, Grep, AskUserQuestion
 ---
 
@@ -40,7 +40,7 @@ Preview-then-confirm is the default. There is no `--dry-run` flag because **the 
 | AGENTS.md | local + `gh api repos/$OWNER_REPO/contents/AGENTS.md` | mode strictness; refuse if AI-prohibited |
 | CONTRIBUTING.md | same | DCO/signed-commits flags |
 | Existing labels | `gh api repos/$OWNER_REPO/labels --jq '.[].name'` | refuse if `immune:*` already present |
-| Anthropic key | `gh secret list --repo $OWNER_REPO --jq '.[].name'` | filter-only fallback if missing |
+| Existing secrets | `gh secret list --repo $OWNER_REPO --jq '.[].name'` | which agent CLI's creds are already wired |
 | GitHub token scopes | `gh auth status --show-token` | warn if `workflow` scope absent (can't push workflow files) |
 | Solo / team | top contributor's % of commits | model default |
 | Stars | `gh repo view --json stargazerCount` | model default |
@@ -58,13 +58,22 @@ Cache to scratchpad — do not re-fetch.
 | AGENTS.md mentions disclosure / quality-gate | `mode: gate`, `replay: true` |
 | `closure_rate > 0.4` | `mode: gate` |
 | Default | `mode: advisory` |
-| Solo maintainer (top > 80%) | `model: sonnet` |
-| Team repo with `> 1k` stars | `model: opus` |
-| No `ANTHROPIC_API_KEY` secret | Install filter only; comment out attend job; flag in punch list |
+| `OPENAI_API_KEY` secret present | suggest `agent: codex` |
+| `GEMINI_API_KEY` secret present | suggest `agent: gemini` |
+| `ANTHROPIC_API_KEY` (or GCP/AWS for Vertex/Bedrock) | suggest `agent: claude` |
+| None of the above | suggest `agent: claude`; flag punch list to set a key before workflows fire |
 | Language is Rust / Go | `replay: true` |
 | Language is Java / Maven / Gradle | `replay: false` |
 | Language is Swift | `replay: false` |
-| `--mode` / `--model` flag passed | Overrides inference |
+| `--mode` / `--agent` flag passed | Overrides inference |
+
+### Agent elicitation
+
+After auto-suggesting, **always elicit** the final choice with `AskUserQuestion`:
+
+> Which headless agent CLI should attend spawn? `claude` (Anthropic family — direct / Vertex / Bedrock), `codex` (OpenAI), or `gemini` (Google)?
+
+The detected secrets are the suggestion order. The maintainer's answer is what gets baked into the workflow file as `agent: <name>`. AI-forward maintainers know these CLIs; the elicitation is a one-click confirmation, not a tutorial.
 
 ## Phase 3: Render artifacts (in memory only)
 
@@ -99,9 +108,10 @@ Stars:          <n>
 
 ### B. Inferred knobs
 ```
-mode:    <advisory|gate>     (← because <reason>)
-model:   <sonnet|opus>       (← because <reason>)
-replay:  <true|false>        (← because <reason>)
+mode:    <advisory|gate>          (← because <reason>)
+agent:   <claude|codex|gemini>    (← because <reason>; confirmed via elicitation)
+replay:  <true|false>             (← because <reason>)
+hg-fanout: 3                       (default; 0 disables HG generation)
 ```
 
 ### C. Files to be inserted
@@ -116,13 +126,18 @@ List the 7 labels; print the `gh label create` script in a fenced code block.
 
 ### E. Secrets / token punch list (PROMINENT)
 
-This is the part the user must do before the workflow can run end-to-end:
+This is the part the user must do before the workflow can run end-to-end. The required secret depends on the chosen `agent:`:
 
 ```
-SECRETS REQUIRED ON <owner/repo>:
-  ANTHROPIC_API_KEY   <STATUS: missing | present>
-                       Set via: gh secret set ANTHROPIC_API_KEY --repo <owner/repo>
-                       Without it, the attend stage is skipped (filter-only install).
+SECRETS REQUIRED ON <owner/repo> (depends on chosen agent):
+  agent: claude   → ANTHROPIC_API_KEY
+                    OR (Vertex)  GCP_SERVICE_ACCOUNT_JSON + project + location
+                    OR (Bedrock) AWS_ACCESS_KEY_ID + AWS_SECRET_ACCESS_KEY + region
+  agent: codex    → OPENAI_API_KEY
+  agent: gemini   → GEMINI_API_KEY
+
+  Status of the relevant secret(s): <missing | present>
+  Set via: gh secret set <NAME> --repo <owner/repo>
 
 GITHUB TOKEN SCOPES (your local gh CLI):
   workflow            <STATUS: present | MISSING — required to push workflow files>
@@ -135,7 +150,7 @@ REPO PERMISSIONS:
   PR labels writable? <yes/no>     (workflow needs `pull-requests: write`)
 ```
 
-If any required item is missing or unknown, **block confirmation** until the user confirms they've set them or explicitly accepts a degraded install.
+If any required item is missing or unknown, **block confirmation** until the user confirms they've set them or explicitly accepts a degraded install (filter-only; attend will hard-fail until the secret is set).
 
 ### F. PRs that will be opened
 ```

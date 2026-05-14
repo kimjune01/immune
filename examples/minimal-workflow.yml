@@ -1,12 +1,10 @@
 # Drop in .github/workflows/immune.yml
 #
 # Two jobs, label-driven dispatch. Filter fires on PR open. Attend fires
-# only when filter (or a maintainer) adds immune:t1-pass. Same interface
-# whether the label was set by CI or by a human.
+# only when filter (or a maintainer) adds immune:t1-pass.
 #
-# Pick exactly ONE of the four provider blocks for `attend`. The action
-# auto-detects the provider from which credentials are present, so you
-# can also leave `provider:` blank.
+# Attend runs a HEADLESS AGENT CLI (claude | codex | gemini), spawned K=3
+# times in parallel for the hypothesis-graph fan-out. Pick ONE block.
 
 name: immune
 on:
@@ -36,35 +34,39 @@ jobs:
       github.event.label.name == 'immune:t1-pass'
     runs-on: ubuntu-latest
     steps:
-      # ---- Anthropic direct (default) ----
+      # ---- claude (Anthropic direct) ----
       - uses: kimjune01/immune/attend@v0
         with:
-          provider: anthropic
-          model: sonnet  # haiku | sonnet | opus
-          replay: 'false'
+          agent: claude
+          hg-fanout: '3'
           anthropic-api-key: ${{ secrets.ANTHROPIC_API_KEY }}
 
-      # ---- Google Vertex AI ----
+      # ---- claude via Vertex AI ----
       # - uses: kimjune01/immune/attend@v0
       #   with:
-      #     provider: vertex_ai
-      #     model: sonnet
+      #     agent: claude
+      #     use-vertex: '1'
       #     google-application-credentials: ${{ secrets.GCP_SERVICE_ACCOUNT_JSON }}
       #     vertexai-project: my-gcp-project
       #     vertexai-location: us-east5
 
-      # ---- AWS Bedrock ----
+      # ---- claude via AWS Bedrock ----
       # - uses: kimjune01/immune/attend@v0
       #   with:
-      #     provider: bedrock
-      #     model: sonnet
+      #     agent: claude
+      #     use-bedrock: '1'
       #     aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
       #     aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
       #     aws-region: us-east-1
 
-      # ---- OpenAI ----
+      # ---- codex (OpenAI) ----
       # - uses: kimjune01/immune/attend@v0
       #   with:
-      #     provider: openai
-      #     model: gpt-5  # explicit model id; aliases (haiku/sonnet/opus) don't apply
+      #     agent: codex
       #     openai-api-key: ${{ secrets.OPENAI_API_KEY }}
+
+      # ---- gemini (Google) ----
+      # - uses: kimjune01/immune/attend@v0
+      #   with:
+      #     agent: gemini
+      #     gemini-api-key: ${{ secrets.GEMINI_API_KEY }}

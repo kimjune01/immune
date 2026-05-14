@@ -46,8 +46,9 @@ The Toyota Production System mapping is exact:
 **No billing. No data leakage. Bring your own tokens.**
 
 - **No billing.** immune is AGPL software running in your CI runner. There is no SaaS, no subscription, no per-PR fee, no usage tier. Anthropic charges you directly for the LLM tokens (~$0.01–$0.05/PR) at their published rates. We don't touch payment.
-- **No data leakage.** Your PR contents (diffs, comments, attestations) are sent only to (a) the LLM provider you configured — Anthropic direct, Google Vertex AI, AWS Bedrock, or OpenAI — and (b) GitHub itself. Nothing is sent to a kimjune01-controlled endpoint. There is no telemetry, no analytics, no "improve our service" data collection. The action runs in your runner; it phones nowhere.
-- **Bring your own tokens.** `GITHUB_TOKEN` is the workflow's own token (default `${{ github.token }}`). The provider key (`ANTHROPIC_API_KEY` / `OPENAI_API_KEY` / GCP service-account JSON / AWS creds) is your secret, scoped to your repo. immune never sees, stores, or proxies credentials it didn't originate. If you revoke either token, immune stops working on the next run; there is no backdoor.
+- **No data leakage.** Your PR contents (diffs, comments, attestations) are sent only to (a) the LLM provider behind the agent CLI you chose (`claude`, `codex`, or `gemini`) and (b) GitHub itself. Nothing is sent to a kimjune01-controlled endpoint. There is no telemetry, no analytics, no "improve our service" data collection. The action runs in your runner; it phones nowhere.
+- **No Python deps.** immune.py imports only the stdlib. Every model call is `subprocess.run(...)` against a headless agent CLI you installed (`claude` / `codex` / `gemini`). No `pip install` of third-party libraries — the supply-chain surface is "what those CLIs depend on", which their maintainers audit.
+- **Bring your own tokens.** `GITHUB_TOKEN` is the workflow's own token (default `${{ github.token }}`). The agent's credentials (`ANTHROPIC_API_KEY` / `OPENAI_API_KEY` / `GEMINI_API_KEY` / GCP service-account JSON / AWS creds) are your secrets, scoped to your repo. immune never sees, stores, or proxies credentials it didn't originate. If you revoke either token, immune stops working on the next run; there is no backdoor.
 
 These are non-negotiable. The competitive landscape (devin, copilot enterprise, codiumai, greptile) all violate at least one. The trust gap is the wedge: maintainers will install a tool that runs in their own runner with their own keys before they install one that proxies their PRs through a third-party SaaS.
 
@@ -212,18 +213,17 @@ When enough maintainers run a receipt-validating gate, contributor pipelines hav
 
 ## Install
 
-Drop [`examples/minimal-workflow.yml`](examples/minimal-workflow.yml) into your repo as `.github/workflows/immune.yml`. It wires the two-job (filter + attend) shape with a label-driven dispatch and shows all four provider variants commented out. Pick one for `attend`:
+Drop [`examples/minimal-workflow.yml`](examples/minimal-workflow.yml) into `.github/workflows/immune.yml`. Pick one `attend` block — the agent CLI it spawns is what runs the K=3 hypothesis-graph fan-out:
 
-| Provider | Required input(s) |
-|---|---|
-| `anthropic` | `anthropic-api-key` |
-| `vertex_ai` | `google-application-credentials` (path or raw JSON), `vertexai-project`, `vertexai-location` |
-| `bedrock` | `aws-access-key-id`, `aws-secret-access-key`, `aws-region` |
-| `openai` | `openai-api-key`, plus an explicit `model` id (aliases don't apply) |
+| `agent:` | CLI installed | Required secret(s) |
+|---|---|---|
+| `claude` | `@anthropic-ai/claude-code` (npm) | `anthropic-api-key`, OR Vertex (`use-vertex: '1'` + GCP creds), OR Bedrock (`use-bedrock: '1'` + AWS creds) |
+| `codex` | `@openai/codex` (npm) | `openai-api-key` |
+| `gemini` | `@google/gemini-cli` (npm) | `gemini-api-key` |
 
-`provider:` can be left blank — the action auto-detects from which credentials are present (priority: vertex > bedrock > openai > anthropic).
+`agent:` can be left blank — auto-detects from which credentials are present (priority: codex if `OPENAI_API_KEY`, gemini if `GEMINI_API_KEY`, else claude).
 
-For Claude-family providers (anthropic / vertex_ai / bedrock), `model:` accepts the aliases `haiku`, `sonnet`, `opus` and resolves to the right per-provider model id.
+Want a different agent CLI? Edit the install step to `npm install` your binary; `immune.py` will shell out to whatever `IMMUNE_AGENT` names. The three above are pre-wired because they're the popular drop-ins.
 
 ## CLI
 

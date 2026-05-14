@@ -11,15 +11,24 @@ Usage:
 Env (filter):
     GITHUB_TOKEN                       required
 
-Env (attend — pick ONE provider; auto-detected in this priority order):
-    IMMUNE_PROVIDER                    optional override: anthropic|vertex_ai|bedrock|openai
-    IMMUNE_MODEL                       alias (haiku|sonnet|opus) for Claude-family,
-                                       or explicit model id for openai. default: sonnet.
+Env (attend — agent runtime is a headless CLI, not a Python SDK):
+    IMMUNE_AGENT                       'claude' (default), 'codex', or 'gemini'
+    IMMUNE_HG_FANOUT                   number of parallel hypothesis perturbations
+                                       (default 3, set 0 to disable HG generation)
 
-    vertex_ai:   GOOGLE_APPLICATION_CREDENTIALS, VERTEXAI_PROJECT, VERTEXAI_LOCATION
-    bedrock:     AWS_ACCESS_KEY_ID, AWS_SECRET_ACCESS_KEY, AWS_REGION
-    openai:      OPENAI_API_KEY
-    anthropic:   ANTHROPIC_API_KEY
+    claude (Anthropic family):
+        ANTHROPIC_API_KEY              direct API
+        CLAUDE_CODE_USE_VERTEX=1 + GOOGLE_APPLICATION_CREDENTIALS + ...
+        CLAUDE_CODE_USE_BEDROCK=1 + AWS_*
+    codex (OpenAI family):
+        OPENAI_API_KEY
+    gemini (Google):
+        GEMINI_API_KEY  (or GOOGLE_API_KEY)
+
+If you want a different runtime, swap the CLI in your workflow file — immune
+just shells out to whatever IMMUNE_AGENT names. Three are supported out of
+the box because they're the popular drop-ins; anything else is a one-line
+edit to your action wrapper.
 """
 from __future__ import annotations
 
@@ -243,6 +252,7 @@ class AttendReport:
     test_replay: dict[str, Any] | None = None
     legibility_verdict: str | None = None
     legibility_reason: str | None = None
+    hypothesis_graph_built: dict[str, Any] | None = None
     verdict: str = "pass"  # pass | warn | needs_human
     reasons: list[str] = field(default_factory=list)
 
@@ -294,66 +304,69 @@ def attend_attestation(body: str) -> tuple[str | None, bool | None]:
     return path, actual == expected
 
 
-# Provider dispatch for the legibility LLM call. LiteLLM normalizes the four
-# common Claude/OpenAI-compatible endpoints behind one call site, so adding
-# a provider is a model-string change, not a new HTTP path.
-
-_MODEL_ALIASES = {
-    "anthropic": {
-        "haiku":  "claude-haiku-4-5-20251001",
-        "sonnet": "claude-sonnet-4-6",
-        "opus":   "claude-opus-4-7",
-    },
-    "vertex_ai": {
-        "haiku":  "claude-haiku-4-5@20251001",
-        "sonnet": "claude-sonnet-4-6",
-        "opus":   "claude-opus-4-7",
-    },
-    "bedrock": {
-        "haiku":  "anthropic.claude-haiku-4-5-20251001-v1:0",
-        "sonnet": "anthropic.claude-sonnet-4-6-v1:0",
-        "opus":   "anthropic.claude-opus-4-7-v1:0",
-    },
-}
+# Headless agent runtime. Two CLIs are supported: `claude` (Anthropic family,
+# routes Anthropic direct / Vertex / Bedrock via CLAUDE_CODE_USE_* env vars)
+# and `codex` (OpenAI family). No Python SDK dependency — every model call is
+# a subprocess invocation, so credentials live in env vars and the action's
+# attack surface is "what the CLI can read", not "what we imported".
 
 
-def _detect_provider() -> str | None:
-    explicit = os.environ.get("IMMUNE_PROVIDER")
-    if explicit:
+_SUPPORTED_AGENTS = ("claude", "codex", "gemini")
+
+
+def _agent() -> str:
+    """Return 'claude', 'codex', or 'gemini'. Explicit IMMUNE_AGENT wins; else auto-detect."""
+    explicit = os.environ.get("IMMUNE_AGENT", "").strip().lower()
+    if explicit in _SUPPORTED_AGENTS:
         return explicit
-    if os.environ.get("GOOGLE_APPLICATION_CREDENTIALS") or os.environ.get("VERTEXAI_PROJECT"):
-        return "vertex_ai"
-    if os.environ.get("AWS_ACCESS_KEY_ID") or os.environ.get("AWS_SESSION_TOKEN"):
-        return "bedrock"
     if os.environ.get("OPENAI_API_KEY"):
-        return "openai"
-    if os.environ.get("ANTHROPIC_API_KEY"):
-        return "anthropic"
-    return None
+        return "codex"
+    if os.environ.get("GEMINI_API_KEY") or os.environ.get("GOOGLE_API_KEY"):
+        return "gemini"
+    return "claude"
 
 
-def _resolve_model(provider: str, model: str) -> str:
-    table = _MODEL_ALIASES.get(provider)
-    if table and model in table:
-        return table[model]
-    return model
+def _agent_available(agent: str) -> bool:
+    return subprocess.call(["which", agent], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL) == 0
+
+
+def _agent_cmd(agent: str) -> list[str]:
+    if agent == "claude":
+        return ["claude", "--print"]
+    if agent == "codex":
+        return ["codex", "exec", "-"]
+    if agent == "gemini":
+        return ["gemini", "--yolo", "-p", "-"]
+    raise ValueError(f"unsupported agent: {agent}")
+
+
+def _spawn_agent(prompt: str, *, timeout: int = 90) -> tuple[str | None, str | None]:
+    """Run the configured headless CLI with `prompt` on stdin.
+
+    Returns (stdout, error). On success, error is None. On any failure
+    (CLI missing, non-zero exit, timeout), stdout is None and error
+    explains why — no exception is raised.
+    """
+    agent = _agent()
+    if not _agent_available(agent):
+        return None, f"skip ({agent} CLI not on PATH)"
+    try:
+        out = subprocess.run(
+            _agent_cmd(agent), input=prompt, capture_output=True, text=True,
+            timeout=timeout, check=False,
+        )
+    except subprocess.TimeoutExpired:
+        return None, f"timeout after {timeout}s ({agent})"
+    except OSError as e:
+        return None, f"spawn failed ({agent}): {e!s}"
+    if out.returncode != 0:
+        return None, f"non-zero exit ({agent}): {out.stderr.strip()[:200]}"
+    text = (out.stdout or "").strip()
+    return (text, None) if text else (None, f"empty output ({agent})")
 
 
 def attend_legibility(body: str, title: str, diff_summary: str) -> tuple[str | None, str | None]:
-    """WHY vs WHAT description check via the configured provider."""
-    provider = _detect_provider()
-    if not provider:
-        return None, "skip (no provider credentials in env)"
-
-    try:
-        import litellm  # type: ignore
-    except ImportError:
-        return None, "skip (litellm not installed; run `pip install litellm`)"
-
-    model_alias = os.environ.get("IMMUNE_MODEL", "sonnet")
-    model = _resolve_model(provider, model_alias)
-    litellm_model = model if "/" in model else f"{provider}/{model}"
-
+    """WHY vs WHAT description check via the configured headless agent."""
     prompt = (
         f"PR title: {title}\nPR body: {body}\nDiff stats: {diff_summary}\n\n"
         "Does this PR description explain WHY the change is correct (root cause, "
@@ -361,38 +374,80 @@ def attend_legibility(body: str, title: str, diff_summary: str) -> tuple[str | N
         "diff)? Answer exactly: WHY or WHAT, then one sentence explaining your "
         "judgment."
     )
-
-    extra: dict[str, Any] = {}
-    if provider == "vertex_ai":
-        if proj := os.environ.get("VERTEXAI_PROJECT"):
-            extra["vertex_project"] = proj
-        if loc := os.environ.get("VERTEXAI_LOCATION"):
-            extra["vertex_location"] = loc
-    elif provider == "bedrock":
-        if region := os.environ.get("AWS_REGION"):
-            extra["aws_region_name"] = region
-
-    try:
-        resp = litellm.completion(
-            model=litellm_model,
-            messages=[{"role": "user", "content": prompt}],
-            max_tokens=150,
-            timeout=15,
-            **extra,
-        )
-    except Exception as e:
-        return None, f"error ({provider}): {e!s}"
-
-    try:
-        text = resp.choices[0].message.content.strip()
-    except (AttributeError, IndexError):
-        return None, f"error ({provider}): malformed response"
-
+    text, err = _spawn_agent(prompt, timeout=30)
+    if text is None:
+        return None, err
     if text.upper().startswith("WHY"):
         return "why", text
     if text.upper().startswith("WHAT"):
         return "what", text
     return None, text
+
+
+# ---------------------------------------------------------------------------
+# In-memory hypothesis graph builder
+#
+# Spawns K parallel headless-agent perturbations on the PR. Each perturbation
+# has a distinct angle (correctness risk, edge cases, scope/conflict). Results
+# are aggregated into an HG markdown block included in the synthesis comment.
+# Nothing is persisted across PRs — the graph lives only in this process.
+
+_HG_PERTURBATIONS = [
+    ("H1-correctness", "What is most likely to be SUBTLY WRONG with this PR's approach? Identify one specific failure mode that would slip through casual review. Reply in 2 lines: line 1 names the failure, line 2 names a perturbation that would expose it."),
+    ("H2-edge-cases",  "What input class or edge case does this diff fail to handle? Be concrete (a value, a shape, a state). Reply in 2 lines: line 1 names the unhandled case, line 2 names the trajectory shape (convergent / divergent / oscillatory / chaotic) you'd expect when probing it."),
+    ("H3-scope",       "Does this PR's diff scope match its stated intent, or does it touch files / functions outside what the title claims? Reply in 2 lines: line 1 lists out-of-scope changes (or 'none'), line 2 names the risk this introduces."),
+]
+
+
+def attend_hypothesis_graph_build(body: str, title: str, diff_summary: str, k: int = 3) -> dict[str, Any] | None:
+    """Generate an in-memory HG by fanning out K perturbation prompts.
+
+    Returns a dict with `nodes` (list of {id, prompt, response, error}) and
+    `agent` (which CLI ran them). Returns None when fan-out is disabled
+    (k <= 0) or no agent is on PATH.
+    """
+    if k <= 0:
+        return None
+    agent = _agent()
+    if not _agent_available(agent):
+        return {"agent": agent, "nodes": [], "skip": f"{agent} CLI not on PATH"}
+
+    base_context = (
+        f"You are running as one perturbation in a hypothesis graph. PR under review:\n\n"
+        f"Title: {title}\nBody: {body[:2000]}\nDiff stats: {diff_summary}\n\n"
+    )
+    nodes: list[dict[str, Any]] = []
+    perturbations = _HG_PERTURBATIONS[:max(1, min(k, len(_HG_PERTURBATIONS)))]
+
+    # Run perturbations in parallel via threads (each spawns a subprocess).
+    import concurrent.futures
+    def _run(p: tuple[str, str]) -> dict[str, Any]:
+        node_id, ask = p
+        text, err = _spawn_agent(base_context + ask, timeout=60)
+        return {"id": node_id, "prompt": ask, "response": text, "error": err}
+
+    with concurrent.futures.ThreadPoolExecutor(max_workers=len(perturbations)) as ex:
+        nodes = list(ex.map(_run, perturbations))
+
+    return {"agent": agent, "nodes": nodes}
+
+
+def render_hypothesis_graph(hg: dict[str, Any] | None) -> str:
+    """Render the in-memory HG as a markdown block for inclusion in the synthesis comment."""
+    if hg is None:
+        return ""
+    if hg.get("skip"):
+        return f"\n\n**Hypothesis graph:** skipped ({hg['skip']})\n"
+    lines = [f"\n\n**Hypothesis graph** (built in-memory by {hg.get('agent','?')}, K={len(hg['nodes'])}):\n"]
+    for n in hg["nodes"]:
+        lines.append(f"\n- **{n['id']}**")
+        if n.get("error"):
+            lines.append(f"  - error: {n['error']}")
+        elif n.get("response"):
+            for ln in n["response"].splitlines():
+                if ln.strip():
+                    lines.append(f"  - {ln.strip()}")
+    return "\n".join(lines) + "\n"
 
 
 def run_attend(pr: PR, this_pr: dict) -> AttendReport:
@@ -408,6 +463,12 @@ def run_attend(pr: PR, this_pr: dict) -> AttendReport:
         f"across {this_pr.get('changed_files', '?')} files"
     )
     r.legibility_verdict, r.legibility_reason = attend_legibility(body, title, diff_summary)
+
+    try:
+        k = int(os.environ.get("IMMUNE_HG_FANOUT", "3"))
+    except ValueError:
+        k = 3
+    r.hypothesis_graph_built = attend_hypothesis_graph_build(body, title, diff_summary, k=k)
 
     # Test replay is the heaviest check; stub for MVP.
     r.test_replay = {"status": "not_implemented_in_mvp"}
@@ -612,18 +673,20 @@ def emit_attend_markdown(receipt: dict) -> str:
     a = receipt["attend"]
     rows = [
         f"| Verdict | **{receipt['verdict']}** |",
-        f"| Hypothesis graph | {'yes' if a['hypothesis_graph_present'] else 'no'} |",
+        f"| Hypothesis graph (contributor) | {'yes' if a['hypothesis_graph_present'] else 'no'} |",
         f"| Attestation | {a.get('attestation_path') or '—'} (sha verified: {a.get('attestation_sha256_verified')}) |",
         f"| Test replay | {a.get('test_replay') or '—'} |",
         f"| Legibility | {a.get('legibility_verdict') or '—'} |",
         f"| Synthesis | {a.get('legibility_reason') or '—'} |",
         f"| Reasons | {', '.join(a['reasons']) or 'none'} |",
     ]
+    hg_block = render_hypothesis_graph(a.get("hypothesis_graph_built"))
     return (
         "### immune attend (T2+T3)\n\n"
         "| Check | Result |\n|---|---|\n"
         + "\n".join(rows)
-        + "\n\n<sub>second-order receipt synthesized by SOTA model — https://github.com/kimjune01/immune</sub>"
+        + hg_block
+        + "\n<sub>second-order receipt synthesized by SOTA model — https://github.com/kimjune01/immune</sub>"
     )
 
 
